@@ -4,7 +4,9 @@ A responsive household dashboard inspired by the supplied UI mockup: scenic land
 
 ## Run locally
 
-Install Node.js 22.12+ (Node 24 LTS recommended) and pnpm 11. This repository includes `pnpm-lock.yaml` for reproducible installs.
+Install Node.js 22.12+ and pnpm 10.11.1. The clean install/build is verified with Node 24.18.0, matching the Cloudflare build environment. `package.json` pins pnpm 10.11.1, and `pnpm-lock.yaml` records the exact dependency versions for reproducible installs.
+
+This is a single application, so there is no `pnpm-workspace.yaml`. Dependency build-script permissions live in `package.json` under `pnpm.onlyBuiltDependencies`, allowing only `esbuild` and `workerd`.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -72,9 +74,10 @@ For Git-connected Workers Builds, connect `JasonJohnson2/family-dashboard`, sele
 | Install command (if configurable) | `pnpm install --frozen-lockfile` |
 | Build command                     | `pnpm build`                     |
 | Deploy command                    | `pnpm exec wrangler deploy`      |
-| Node version                      | 24                               |
+| Node version                      | 24.18.0                          |
+| pnpm version                      | 10.11.1                          |
 
-The checked-in lockfile identifies pnpm. Use pnpm 11 if the build environment asks for a package-manager version. Cloudflare Pages could also serve the resulting `dist/` folder, but Workers is the configured and validated deployment target. Nothing is automatically published by this repository's test workflow.
+The checked-in lockfile identifies pnpm, and `packageManager` pins version 10.11.1 for local development and GitHub Actions. If overriding Cloudflare's tools, set `PNPM_VERSION=10.11.1` and `NODE_VERSION=24.18.0` in the build environment ([Cloudflare build-image settings](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)). The default pnpm 10.11.1 install works without workspace configuration. Cloudflare Pages could also serve the resulting `dist/` folder, but Workers is the configured deployment target. Nothing is automatically published by this repository's test workflow.
 
 ## Code and data model
 
