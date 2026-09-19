@@ -1,0 +1,23 @@
+import { useRegisterSW } from 'virtual:pwa-register/react';
+
+export function AppUpdate() {
+  const {
+    needRefresh: [ready, setReady],
+    updateServiceWorker,
+  } = useRegisterSW();
+  if (!ready) return null;
+  return (
+    <aside className="update-prompt" aria-label="App update available">
+      <p>A fresh version is ready.</p>
+      <small>Updating will reset this session's demo changes.</small>
+      <div>
+        <button className="outline-button" onClick={() => setReady(false)}>
+          Later
+        </button>
+        <button className="primary" onClick={() => updateServiceWorker(true)}>
+          Update app
+        </button>
+      </div>
+    </aside>
+  );
+}
