@@ -9,7 +9,7 @@ export function addDays(key: DateKey, count: number): DateKey {
   return dateKey(date);
 }
 export function weekStart(key: DateKey): DateKey {
-  return addDays(key, -((parseDate(key).getDay() + 6) % 7));
+  return addDays(key, -parseDate(key).getDay());
 }
 export function daysFrom(key: DateKey, count: number): DateKey[] {
   return Array.from({ length: count }, (_, i) => addDays(key, i));

@@ -1374,9 +1374,9 @@ main:before {
   font-weight: 600;
 }
 .meal-day-card header > b {
-  font-size: 10px;
+  font-size: 17px;
   color: #9aa7ae;
-  font-weight: 400;
+  font-weight: 700;
   margin-left: auto;
 }
 .meal-day-card header em {
@@ -2655,7 +2655,8 @@ body:has(dialog[open]) {
     font-size: 11px;
   }
   .meal-day-card header > b {
-    font-size: 9px;
+    font-size: 16px;
+    font-weight: 700;
   }
   .meal-day-card h3 {
     font-size: 15px;
