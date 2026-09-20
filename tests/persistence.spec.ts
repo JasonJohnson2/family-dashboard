@@ -64,7 +64,8 @@ test('failed checkbox save reverts the check and announces the error', async ({ 
       body: JSON.stringify({ error: 'Save unavailable', code: 'unavailable' }),
     }),
   );
-  await page.getByRole('checkbox', { name: 'Milk', exact: true }).check();
+  // This request intentionally fails: the checkbox may revert before Playwright checks its state.
+  await page.getByRole('checkbox', { name: 'Milk', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Save unavailable');
   await expect(page.getByRole('checkbox', { name: 'Milk', exact: true })).not.toBeChecked();
 });
