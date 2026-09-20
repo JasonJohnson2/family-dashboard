@@ -14,6 +14,7 @@ import { Home, type EditorKind } from './components/Home';
 import { Calendar } from './components/Calendar';
 import { Chores, Lists, Meals } from './components/Sections';
 import { Editor, EventDetail } from './components/Editors';
+import { SyncStatus } from './components/SyncStatus';
 import { Avatar } from './components/ui';
 import { useHousehold } from './store';
 import { formatDate } from './lib/dates';
@@ -31,7 +32,7 @@ function getSection(): Section {
   return navigation.some((item) => item.id === section) ? (section as Section) : 'home';
 }
 export default function App() {
-  const { today, family, notice } = useHousehold();
+  const { today, family, notice, sync, refresh } = useHousehold();
   const [section, setSection] = useState<Section>(getSection);
   const [editor, setEditor] = useState<{
     kind: EditorKind;
@@ -62,7 +63,9 @@ export default function App() {
     location.hash = next;
     setSection(next);
   }
-  const open = (kind: EditorKind, date?: string) => setEditor({ kind, date });
+  const open = (kind: EditorKind, date?: string) => {
+    if (sync.data) setEditor({ kind, date });
+  };
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   return (
@@ -152,6 +155,7 @@ export default function App() {
                 aria-label="Manage family members"
                 onClick={() => open('family')}
               >
+                {!family.length && <Users size={25} />}
                 {family.slice(0, 5).map((person) => (
                   <Avatar key={person.id} id={person.id} />
                 ))}
@@ -167,27 +171,51 @@ export default function App() {
             </div>
           </header>
           <div className="main-content">
-            {section === 'home' && <Home navigate={navigate} open={open} viewEvent={setEvent} />}
-            {section === 'calendar' && (
-              <Calendar open={(date) => open('event', date)} viewEvent={setEvent} />
-            )}
-            {section === 'chores' && <Chores open={() => open('chore')} />}
-            {section === 'meals' && <Meals open={(date) => open('meal', date)} />}
-            {section === 'lists' && (
-              <Lists open={() => setEditor({ kind: 'list', newList: true })} />
+            <SyncStatus />
+            {sync.data && (
+              <>
+                {section === 'home' && (
+                  <Home navigate={navigate} open={open} viewEvent={setEvent} />
+                )}
+                {section === 'calendar' && (
+                  <Calendar open={(date) => open('event', date)} viewEvent={setEvent} />
+                )}
+                {section === 'chores' && <Chores open={() => open('chore')} />}
+                {section === 'meals' && <Meals open={(date) => open('meal', date)} />}
+                {section === 'lists' && (
+                  <Lists open={() => setEditor({ kind: 'list', newList: true })} />
+                )}
+              </>
             )}
             <footer className="app-footer">
               <span>
                 <span className="status-dot" />
                 {online ? (
-                  'A little space for your family'
+                  sync.pending ? (
+                    'Saving…'
+                  ) : sync.refreshing ? (
+                    'Checking for changes…'
+                  ) : sync.error ? (
+                    'Needs attention'
+                  ) : sync.data ? (
+                    'Household up to date'
+                  ) : (
+                    'Connecting…'
+                  )
                 ) : (
                   <>
-                    <WifiOff size={13} /> Offline · Your home is still here
+                    <WifiOff size={13} /> Offline · Reconnect to load and save
                   </>
                 )}
               </span>
-              <button onClick={() => open('about')}>Demo data · Resets on refresh</button>
+              <button
+                disabled={!!sync.pending || sync.refreshing}
+                onClick={() => {
+                  void refresh();
+                }}
+              >
+                Refresh household
+              </button>
             </footer>
           </div>
         </main>

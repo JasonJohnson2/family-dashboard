@@ -27,10 +27,31 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,jpg,webmanifest,woff,woff2}'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
+        navigateFallbackDenylist: [/^\/api(?:\/|$)/],
       },
     }),
   ],
-  server: { port: 5173, strictPort: true },
+  server: {
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8787',
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on('proxyReq', (proxyRequest, request) => {
+            // Preserve the Worker's same-origin guard when Vite forwards local/LAN requests.
+            if (request.headers.origin === `http://${request.headers.host}`)
+              proxyRequest.setHeader('Origin', 'http://127.0.0.1:8787');
+          });
+        },
+      },
+    },
+  },
   preview: { port: 4173, strictPort: true },
-  test: { include: ['src/**/*.test.ts'] },
+  test: {
+    include: ['src/**/*.test.ts', 'worker/**/*.test.ts'],
+    testTimeout: 30000,
+    hookTimeout: 30000,
+  },
 });

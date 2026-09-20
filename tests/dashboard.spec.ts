@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/__test/reset');
+  expect(response.ok()).toBe(true);
+});
+test.afterEach(async ({ page }) => {
+  if (!page.isClosed()) await expect(page.getByText('Saving�', { exact: true })).toHaveCount(0);
+});
+
 test('five sections fit the screen and navigation works', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -80,7 +88,7 @@ test('edit a meal and update family names', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Jamie', exact: true })).toBeVisible();
 });
 
-test('time validation, modal keyboard handling and refresh reset', async ({ page }) => {
+test('time validation, modal keyboard handling and refresh persistence', async ({ page }) => {
   await page.goto('/#calendar');
   await page.getByRole('button', { name: 'Add event', exact: true }).click();
   const dialog = page.getByRole('dialog');
@@ -91,10 +99,11 @@ test('time validation, modal keyboard handling and refresh reset', async ({ page
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await page.goto('/#lists');
-  await page.getByRole('textbox', { name: 'New list item' }).fill('Temporary demo item');
+  await page.getByRole('textbox', { name: 'New list item' }).fill('Persistent household item');
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'New list item' })).toHaveValue('');
   await page.reload();
-  await expect(page.getByText('Temporary demo item')).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Persistent household item' })).toBeVisible();
 });
 
 test('create a recurring chore with assignment', async ({ page }) => {
@@ -136,9 +145,12 @@ test('production shell reloads offline', async ({ page, context, browserName }) 
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   await page.getByRole('textbox', { name: 'New list item' }).fill('Temporary offline item');
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'New list item' })).toHaveValue('');
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'The things we need' })).toBeVisible();
-  await expect(page.getByRole('checkbox', { name: 'Milk', exact: true })).toBeVisible();
-  await expect(page.getByRole('checkbox', { name: 'Temporary offline item' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Lists', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Could not reach');
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.getByRole('checkbox', { name: 'Temporary offline item' })).toBeVisible();
 });

@@ -1,19 +1,30 @@
 import { useState, type FormEvent } from 'react';
 import { Check, Plus, Trash2 } from 'lucide-react';
 import { useHousehold } from '../store';
+import { newId } from '../lib/id';
 import { Empty } from './ui';
 
 export function QuickList({ full = false, initialList }: { full?: boolean; initialList?: string }) {
   const { lists, addItem, toggleItem, removeItem } = useHousehold();
   const [selected, setSelected] = useState(initialList ?? lists[0]?.id);
   const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [itemId, setItemId] = useState(newId);
   const [adding, setAdding] = useState(full);
   const list = lists.find((l) => l.id === selected) ?? lists[0];
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    if (text.trim() && list) {
-      addItem(list.id, text);
-      setText('');
+    if (text.trim() && list && !saving) {
+      setSaving(true);
+      try {
+        await addItem(list.id, text, itemId);
+        setText('');
+        setItemId(newId());
+      } catch {
+        /* Keep the text; the sync banner explains how to retry. */
+      } finally {
+        setSaving(false);
+      }
     }
   }
   if (!list) return <Empty>Create your first shared list.</Empty>;
@@ -62,6 +73,7 @@ export function QuickList({ full = false, initialList }: { full?: boolean; initi
       {adding ? (
         <form className="inline-add" onSubmit={submit}>
           <input
+            disabled={saving}
             aria-label="New list item"
             placeholder="What do we need?"
             maxLength={120}
@@ -70,7 +82,12 @@ export function QuickList({ full = false, initialList }: { full?: boolean; initi
             autoFocus={!full}
             required
           />
-          <button className="primary icon-button" aria-label="Add item" type="submit">
+          <button
+            className="primary icon-button"
+            aria-label="Add item"
+            type="submit"
+            disabled={saving}
+          >
             <Plus size={21} />
           </button>
         </form>

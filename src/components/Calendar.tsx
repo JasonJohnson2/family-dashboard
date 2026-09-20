@@ -166,7 +166,7 @@ export function Calendar({
         )}
         <footer className="calendar-legend">
           <span className="dot" />
-          Household demo calendar
+          Our Home calendar
           <span className="legend-note">
             Apple/iCloud integration planned · No calendars connected
           </span>

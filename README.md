@@ -1,120 +1,135 @@
 # Our Home · Family Dashboard
 
-A responsive household dashboard inspired by the supplied UI mockup: scenic landscape header, family colors, soft cards, and one-tap access to Home, Calendar, Chores, Meals, and Lists. Built with React, TypeScript, and Vite; deployed as static assets on **Cloudflare Workers**.
+A responsive family dashboard for landscape tablets, phones, and desktop browsers. React and TypeScript provide the existing five-section interface; a Cloudflare Worker serves the app and its API, and **Cloudflare D1 stores household data**.
 
-## Run locally
+## Local setup
 
-Install Node.js 22.12+ and pnpm 10.11.1. The clean install/build is verified with Node 24.18.0, matching the Cloudflare build environment. `package.json` pins pnpm 10.11.1, and `pnpm-lock.yaml` records the exact dependency versions for reproducible installs.
-
-This is a single application, so there is no `pnpm-workspace.yaml`. Dependency build-script permissions live in `package.json` under `pnpm.onlyBuiltDependencies`, allowing only `esbuild` and `workerd`.
+Use Node 24.18.0 (22.12+ supported) and pnpm 10.11.1. The repository is a single app, with no pnpm workspace. Dependency build permissions are in `package.json`.
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm db:migrate:local
+pnpm db:seed:local
 pnpm dev
 ```
 
-Open `http://localhost:5173`. The development server binds to `0.0.0.0` so an iPad on the same Wi-Fi can open `http://YOUR-PC-LAN-IP:5173`. Use the network URL printed by Vite; allow the development server on your private network if Windows Firewall asks. No app accounts or environment variables are required.
+Open `http://localhost:5173`, or `http://YOUR-PC-LAN-IP:5173` on the iPad. The development script builds the app shell and starts Vite on the LAN plus Wrangler on loopback port 8787. Vite forwards `/api` to Wrangler; both devices use the same **local** D1 database. Allow the development server through Windows Firewall on your private network if needed. Local migrations and development never use production D1. Wrangler stores local data under `.wrangler/`; keep that directory to preserve your local household between restarts.
+
+The demo seed is optional. Skip it for an empty household. Without it, add family members using the header avatars and create lists from Lists. `pnpm db:seed:local` deliberately adds relative-date sample events, chores, meals, members, and lists **once**. `seed_history` prevents re-running either seed mode from recreating deleted records. Seeding uses insert-only statements and never replaces an existing record. Seed a fresh, migrated database before people start editing it; seeding is not a restore/merge/import tool. The Worker never seeds on startup.
 
 ```sh
-pnpm build           # TypeScript check + production build into dist/
-pnpm preview         # Preview the production build on port 4173
-pnpm preview:worker  # Build + preview through the local Workers runtime
-pnpm deploy:check    # Build + Wrangler dry-run; does not publish
-pnpm test            # Date and recurrence tests
-pnpm format:check    # Check source formatting
+pnpm build              # Check browser + Worker types, build dist/
+pnpm preview            # Serve the built app + API via local Wrangler on port 4173
+pnpm preview:worker     # Build, then the same local Worker preview
+pnpm cf:types           # Regenerate binding types after Wrangler config changes
+pnpm deploy:check       # Build and validate a deployment without publishing
+pnpm test               # Recurrence, optimistic store, and real local D1 API tests
+pnpm format:check       # Formatting
 ```
 
-Browser checks use the production build:
+## Production setup and deployment
 
-```sh
-pnpm exec playwright install chromium webkit
-pnpm build
-pnpm test:e2e
-```
+The configured Worker is `family-dashboard`. `wrangler.jsonc` declares `worker/index.ts`, the static `dist/` assets, and the D1 binding **DB**. API routes run through the Worker first; other routes serve the SPA. Deploy this project as a Worker, not as a static-only Pages site.
 
-The browser suite covers the five sections, responsive overflow, event recurrence, chore completion, list changes, meal editing, family names, modal validation, refresh reset, and the installed app's offline shell. Chromium runs in a landscape tablet viewport; WebKit runs in a phone viewport. Offline reload is verified in Chromium. The WebKit offline-navigation test is explicitly skipped because Playwright WebKit on Windows reports an internal browser error when forced offline; verify this behavior on the physical iPad. All other UI and LAN-ID checks run in both engines. Browser emulation does not replace testing on the physical iPad.
-
-## What's included
-
-- **Home:** local current date and greeting, explicitly labeled sample weather for Fonda, today's events, chores and progress, upcoming events, meals, shared lists, and functional quick actions.
-- **Calendar:** day/week/month views, previous/next/today controls, family filters, event details, creation, all-day events, member assignment, and basic recurrence.
-- **Chores:** creation, assignments, due dates, repeat schedules, filtering, date navigation, and completion per occurrence. Overdue one-time chores remain visible. Recurring chores get a new checkbox on each due date.
-- **Meals:** week navigation, one dinner per day, editing/removing meals, meal icons and notes. Recipe references are reserved in the data model.
-- **Lists:** Groceries, Household, Shopping, new named lists, and adding/checking/removing items. Home and Lists share the same state.
-- **Family:** editable names and colors, initials, and adding members. Open the avatars in the header.
-- **PWA:** manifest, home-screen icons, local fonts and landscape artwork, offline app-shell caching, and an explicit update prompt. A new version does not automatically reload an active household session.
-
-**This is a prototype.** All household data lives in React state in a single browser tab. Changes reset on reload and do not sync across tabs or devices. Offline caching stores only the application assets, not household changes. Weather is a static sample. There is no database, authentication, calendar synchronization, or external API connection. Demo events and meals are seeded relative to the device's current date. The clock/date follows the viewing device's timezone.
-
-## iPad and wall display
-
-Landscape tablets use a sidebar and card grid. Portrait tablets use fewer columns; phones use a bottom navigation bar and stacked cards. Forms use native date/time inputs and dialogs, labeled controls, keyboard focus handling, and larger touch targets. The complete dashboard can scroll on shorter screens so information stays readable.
-
-For the installed experience, open the deployed HTTPS URL in **Safari → Share → Add to Home Screen**, then launch from its icon. HTTPS (or localhost) is required for the service worker. A plain HTTP LAN preview works for the UI and editing but cannot exercise installation/offline caching. Load the production app once online before checking offline behavior. Screen wake/auto-lock and kiosk management are device settings; this prototype does not control them. Start with landscape orientation on the iPad Air and keep browser zoom at 100%.
-
-## Cloudflare Workers deployment
-
-`wrangler.jsonc` defines a **static-assets Worker**, named `family-dashboard`, serving `dist/` with SPA fallback. No Worker API, D1 binding, paid service, or secrets are required at this stage. This follows [Cloudflare's static SPA configuration](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/). Check your account's current limits before enabling future services.
-
-To deploy manually:
+Authenticate with your own account and create the database **once**:
 
 ```sh
 pnpm exec wrangler login
+pnpm db:create
+```
+
+Copy the returned database UUID into `d1_databases[0].database_id` in `wrangler.jsonc`. The database name is `family-dashboard`; the UUID is an identifier, not a secret. For the existing deployment, use the already-provisioned database ID in that file instead of creating another database.
+
+Review `migrations/0001_household.sql`, then initialize and optionally seed production:
+
+```sh
+pnpm db:migrate:remote
+pnpm db:seed:starter
 pnpm deploy:check
 pnpm deploy
 ```
 
-Wrangler prints the `workers.dev` URL after a successful deployment. Authenticate with your own Cloudflare account; no credentials belong in this repository. If a Worker named `family-dashboard` already exists in your account, select an unused `name` in `wrangler.jsonc` before deploying.
+`db:seed:starter` is a deliberate, one-time production command. It creates the four editable starter family members (Jason, Kelly, Mia, Liam) and empty Groceries, Household, and Shopping lists. It does **not** create sample calendar events, chores, meals, or shopping items. Omit it to start entirely empty. `db:seed:generate` produces the same reviewed SQL in the ignored `.wrangler/seed-starter.sql` without executing it. Remote demo seeding is explicitly rejected.
 
-For Git-connected Workers Builds, connect `JasonJohnson2/family-dashboard`, select the deployment branch, and use:
+`pnpm deploy` builds, applies any pending version-controlled D1 migrations, and then publishes the Worker and assets. Migration failure stops deployment. Wrangler tracks applied files in `d1_migrations`; an already-applied migration is not run again. Never edit a migration after it has been applied: add a numbered migration for subsequent changes. Review any future destructive migration and take a database export/Time Travel checkpoint before applying it. Rolling back the Worker does not roll back D1 data.
 
-| Setting                           | Value                            |
-| --------------------------------- | -------------------------------- |
-| Root directory                    | Repository root                  |
-| Install command (if configurable) | `pnpm install --frozen-lockfile` |
-| Build command                     | `pnpm build`                     |
-| Deploy command                    | `pnpm exec wrangler deploy`      |
-| Node version                      | 24.18.0                          |
-| pnpm version                      | 10.11.1                          |
+For Git-connected Cloudflare Workers Builds:
 
-The checked-in lockfile identifies pnpm, and `packageManager` pins version 10.11.1 for local development and GitHub Actions. If overriding Cloudflare's tools, set `PNPM_VERSION=10.11.1` and `NODE_VERSION=24.18.0` in the build environment ([Cloudflare build-image settings](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)). The default pnpm 10.11.1 install works without workspace configuration. Cloudflare Pages could also serve the resulting `dist/` folder, but Workers is the configured deployment target. Nothing is automatically published by this repository's test workflow.
+| Setting       | Value                                                 |
+| ------------- | ----------------------------------------------------- |
+| Repository    | `JasonJohnson2/family-dashboard`                      |
+| Branch / root | `main` / repository root                              |
+| Install       | `pnpm install --frozen-lockfile`                      |
+| Build         | `pnpm build`                                          |
+| Deploy        | `pnpm db:migrate:remote && pnpm exec wrangler deploy` |
+| Node / pnpm   | `24.18.0` / `10.11.1`                                 |
 
-## Code and data model
+The build identity needs Workers deployment and D1 edit permissions for this account. Keep API tokens in Cloudflare's build secret settings or a local environment, never in source control. `.env*`, `.dev.vars*`, `.wrangler/`, and generated artifacts are ignored. No database password is sent to the browser; only the Worker has the DB binding. No scheduled jobs or paid-only features are required. Check current [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) as household usage grows.
 
-```text
-src/
-  App.tsx                    Navigation, layout, section routing
-  store.tsx                  Shared in-memory household state
-  types.ts                   Provider-independent domain models
-  data/
-    mock.ts                  Relative-date fixtures and family defaults
-    calendarProvider.ts      Transport-neutral provider contract; mock adapter
-  lib/
-    dates.ts                 Local dates and recurrence expansion
-    id.ts                    IDs that also work during HTTP LAN testing
-  components/
-    Home.tsx                 Mockup-inspired dashboard
-    Calendar.tsx             Calendar views
-    Sections.tsx             Chores, meals, and lists screens
-    Editors.tsx              Creation/edit dialogs and event details
-    QuickList.tsx            Reusable shared-list controls
-    ui.tsx                   Cards, avatars, filters, rows, dialog shell
-    AppUpdate.tsx            Service-worker update prompt
-  styles.css                 Responsive layout and design tokens
-tests/                       Browser interaction checks
-public/                      Local artwork, app icons, response headers
-wrangler.jsonc               Cloudflare Workers static-assets configuration
+**Access model:** authentication is intentionally outside this phase. Anyone who can reach this deployment can read or change this one household. The same-origin write checks prevent casual cross-site form requests; they are not authentication or access control. Choose access control before storing sensitive family details on a publicly reachable deployment.
+
+## Persistence and synchronization
+
+- The app fetches household state when opened, when a tab becomes visible or focused, when connectivity returns, and every 60 seconds while visible. “Refresh household” also fetches immediately.
+- Checkbox changes render immediately. Writes are queued in order and the server returns authoritative state. Forms wait for confirmation before closing; failed forms retain their entered text.
+- Every mutation carries a household revision and a unique request ID. Writes, assignment changes, completion changes, a retry receipt, and the revision increment commit atomically in a D1 batch. Prepared/bound SQL is used for all runtime values.
+- If another device saved first, a stale write receives a conflict instead of overwriting its changes. The app loads the latest state, reports the conflict, and asks the user to review/reapply their change. This uses a single household-wide revision, intentionally favoring simplicity over automatic field merging.
+- Failed optimistic changes revert to confirmed data. A visible error offers refresh or **Retry save**. Retrying an uncertain network failure uses the exact same request ID and payload, so a response lost after a successful commit does not duplicate data. Later queued changes are reverted with an explicit message to re-enter them. **Dismiss** abandons the pending retry; no offline write queue is stored across reloads.
+- Household data is never cached by the service worker. The installed app shell can open offline, but initial data loading and saves require a connection. An already-open page keeps its last confirmed state; failed saves remain visible. Reconnect/refetch to recover. Wait for “Household up to date” before closing the app; a pending-save unload guard helps prevent accidental navigation.
+- Existing prototype changes lived only in browser memory and cannot be recovered from a prior refresh. The new database starts deliberately; it does not import an old tab's demo state.
+
+## Schema and calendar boundary
+
+`households` contains the singleton `home`, its display name, timezone, and revision. Members, calendar sources/events, chores, meals, lists/items, assignments, completions, and mutation receipts reference `household_id`. Composite foreign keys prevent assignments from crossing household boundaries. List/item and event/chore assignment children cascade on deletion; deleting an assigned member is rejected until assignments are removed. Meals are unique per household/date, and list names are unique per household ignoring ASCII case.
+
+Calendar events retain provider-independent `sourceId`, optional `externalId`, timezone, member IDs, and structured recurrence. The initial source is `local`; API-created events must use it. The `CalendarProvider` contract remains intact, and `icloud`/`google` source types are reserved without any external synchronization implementation or chosen CalDAV strategy.
+
+Recurrence supports none, daily, weekdays, weekly, and monthly, with an optional end date. Monthly dates on the 29th–31st skip months lacking that day. Completion is stored separately per chore/due date, so editing a chore does not erase completion history and completing today does not complete tomorrow. Event exceptions/full RRULE parsing and timezone conversion remain future work. Dates and greetings still follow the viewing device's local timezone; persisted household/event timezones preserve the model boundary without changing current display behavior.
+
+Meals and list items retain optional recipe references for later use, with no recipe functionality added. Weather remains a labeled static sample. No account management, authentication, external calendars, live weather, recipes, AI, or WebSockets are implemented.
+
+## API
+
+- `GET /api/household` returns the current household, family, sources, events, chores, meals, and lists/items. Responses use `Cache-Control: no-store`.
+- `POST /api/mutations` accepts `{ id, revision, operations }`. `src/data/contracts.ts` contains the shared validated contract. Operations support member/event/chore/meal/list/item upserts, item completion, occurrence-specific chore completion, deletion, and household settings. Chore upserts preserve existing completion history; use `chore.complete` to change it.
+- Validation errors return 400, missing completion targets return 404, stale revisions/request-ID mismatches return 409, relational conflicts return 422, and unavailable storage returns 503. Same-request retries return the latest household state. Requests are limited to 64 KiB and 20 operations; an additional SQL statement cap keeps batches within the Workers Free query budget.
+- There is no browser-selectable household ID, arbitrary SQL endpoint, production reset endpoint, or runtime seeding endpoint.
+
+## Tests
+
+```sh
+pnpm install --frozen-lockfile
+pnpm test
+pnpm exec playwright install chromium webkit
+pnpm build
+pnpm test:e2e
+pnpm deploy:check
 ```
 
-Events reference `CalendarSource` and member IDs, not a provider-specific payload. `sourceId` and optional `externalId` allow a future adapter to map remote identities. Provider kinds reserve `icloud`, `google`, `local`, and `mock`; only local/mock data is currently used. `CalendarProvider` describes a read boundary; the mock adapter returns recurrence masters, not remotely expanded occurrences. The app currently seeds those same fixtures directly into its shared state.
+API tests use real local D1 through Miniflare and apply the checked-in migrations. They cover model creation/edit/deletion, check/uncheck, recurrence, assignment integrity, settings, seed idempotence, tenant scoping, injection-safe text, validation, atomic rollback, revision races, retry deduplication, and persistence across a complete runtime restart. Store tests cover optimistic updates, ordered saves, failures, conflicts, and stale refetch responses.
 
-Recurrence supports none/daily/weekdays/weekly/monthly. Monthly events on the 29th–31st skip months without that date. There is no full RFC 5545 RRULE parser, exceptions, cross-timezone conversion, or overnight event editor yet. Events carry a timezone for later normalization. Daily/weekly recurrence preserves local wall-clock time rather than adding fixed UTC milliseconds. An occurrence's ID combines its event ID and local date. Chore completion uses due-date keys so completing today does not complete tomorrow.
+Browser tests run the existing tablet Chromium and phone WebKit flows against an isolated real D1 test database, plus reload/cross-device persistence, refetch, and failed-save recovery. The test-only loopback server in `scripts/test-server.ts` owns its reset endpoint; it is never bundled into the production Worker. Tests run sequentially to isolate database state. Chromium verifies the offline app shell and reconnection. Playwright WebKit on Windows has an existing offline-navigation limitation, so that single check is skipped; validate it on the physical iPad.
 
-Meal plans contain an optional `recipeId`; `Recipe` reserves structured ingredients and instructions. Shared-list items may reference recipes later. No recipe UI or grocery generation is implemented.
+## Project layout
 
-## Next decisions, together
+```text
+src/data/contracts.ts       Validated API contracts and optimistic operations
+src/data/api.ts             Browser HTTP client and timeout handling
+src/data/controller.ts      Save queue, revisions, retry/reconciliation
+src/store.tsx               React household state and resume/refetch lifecycle
+src/data/calendarProvider.ts Provider-independent calendar boundary
+src/data/mock.ts            Explicit seed/test fixtures only
+src/components/             Existing five-section UI and sync status
+worker/index.ts             Same-origin JSON API and asset routing
+worker/database.ts          Prepared SQL, household scoping and atomic mutations
+migrations/                 Version-controlled schema changes
+scripts/                    Development, deliberate seeds, local test harness
+wrangler.jsonc              Worker assets and D1 binding
+```
 
-After reviewing the UI on the iPad, agree on persistence and access control before adding a Workers API and D1 migrations. Separately decide the Apple/iCloud integration method, credentials, sync direction, timezone handling, recurrence exceptions, and conflict behavior. **No iCloud/CalDAV synchronization method has been selected or implemented.** Google/work calendars can later use the same event boundary. Recipes, grocery generation, live weather, and kiosk conveniences are later milestones, not hidden dependencies of this prototype.
+## iPad and wall display
+
+Landscape tablets retain the sidebar and card grid; portrait tablets and phones adapt to fewer columns or bottom navigation. On iPad Safari, use **Share → Add to Home Screen** and open the icon for the standalone experience. Installation and service workers require HTTPS or localhost; HTTP LAN testing supports the UI/API but not offline installation. The update prompt preserves saved data; finish any open unsaved form before updating. Screen wake, auto-lock and kiosk controls remain device settings.
 
 ## Assets
 

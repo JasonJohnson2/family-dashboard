@@ -1558,6 +1558,9 @@ body:has(dialog[open]) {
   display: grid;
   gap: 17px;
 }
+.editor-fields {
+  display: contents;
+}
 .form-intro {
   font-size: 12px;
   line-height: 1.7;
@@ -2857,4 +2860,24 @@ body:has(dialog[open]) {
     bottom: calc(86px + env(safe-area-inset-bottom));
     right: 16px;
   }
+}
+.sync-status {
+  padding: 20px 24px;
+  margin-bottom: 18px;
+  background: #fff;
+  border: 1px solid #d5e4e7;
+  border-radius: 20px;
+  color: #33474e;
+}
+.sync-status p {
+  margin: 0 0 12px;
+}
+.sync-status > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }

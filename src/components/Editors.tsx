@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Heart, MapPin, Repeat2, CalendarDays, Trash2 } from 'lucide-react';
 import { useHousehold } from '../store';
-import { calendarSources } from '../data/mock';
 import { formatDate, formatTime } from '../lib/dates';
 import { newId } from '../lib/id';
 import { Avatar, Modal } from './ui';
@@ -54,6 +53,8 @@ export function Editor({
   const [notes, setNotes] = useState(existingMeal?.notes ?? '');
   const [listId, setListId] = useState(lists[0]?.id ?? '');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [id] = useState(newId);
   const [familyDraft, setFamilyDraft] = useState(family);
   const heading = {
     event: 'Make a little plan',
@@ -63,96 +64,112 @@ export function Editor({
     family: 'Our people',
     about: 'Welcome to Our Home',
   }[kind];
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
+    if (saving) return;
     setError('');
-    if (kind === 'family') {
-      if (familyDraft.some((p) => !p.name.trim())) {
-        setError('Please give everyone a name.');
-        return;
-      }
-      setFamily(
-        familyDraft.map((p) => ({
-          ...p,
-          name: p.name.trim(),
-          initial: p.name.trim().slice(0, 1).toUpperCase(),
-        })),
-      );
-      setNotice('Family updated');
-      onClose();
-      return;
-    }
-    if (!title.trim()) {
-      setError('Add a name to continue.');
-      return;
-    }
-    if (kind === 'event' && !allDay && end <= start) {
-      setError('Choose an end time after the start time.');
-      return;
-    }
-    const id = newId();
-    if (kind === 'event')
-      setEvents((current) => [
-        ...current,
-        {
-          id,
-          sourceId: 'local',
-          title: title.trim(),
-          date: day,
-          startTime: allDay ? undefined : start,
-          endTime: allDay ? undefined : end,
-          allDay,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          memberIds,
-          recurrence: { frequency: recurrence },
-          location: location.trim(),
-        },
-      ]);
-    if (kind === 'chore')
-      setChores((current) => [
-        ...current,
-        {
-          id,
-          title: title.trim(),
-          memberIds,
-          dueDate: day,
-          recurrence: { frequency: recurrence },
-          completedDates: [],
-        },
-      ]);
-    if (kind === 'meal')
-      setMeals((current) => [
-        ...current.filter((meal) => meal.date !== day),
-        {
-          id: existingMeal?.id ?? id,
-          date: day,
-          title: title.trim(),
-          emoji,
-          notes: notes.trim(),
-          recipeId: existingMeal?.recipeId,
-        },
-      ]);
-    if (kind === 'list') {
-      if (newList) {
-        if (lists.some((l) => l.name.toLowerCase() === title.trim().toLowerCase())) {
-          setError('There is already a list with that name.');
+    setSaving(true);
+    try {
+      if (store.sync.canRetrySave) await store.retrySave();
+      if (kind === 'family') {
+        if (familyDraft.some((p) => !p.name.trim())) {
+          setError('Please give everyone a name.');
           return;
         }
-        setLists((current) => [...current, { id, name: title.trim(), items: [] }]);
-      } else addItem(listId, title);
+        await setFamily(
+          familyDraft.map((p) => ({
+            ...p,
+            name: p.name.trim(),
+            initial: p.name.trim().slice(0, 1).toUpperCase(),
+          })),
+        );
+        setNotice('Family updated');
+        onClose();
+        return;
+      }
+      if (!title.trim()) {
+        setError('Add a name to continue.');
+        return;
+      }
+      if (kind === 'event' && !allDay && end <= start) {
+        setError('Choose an end time after the start time.');
+        return;
+      }
+      if (kind === 'event')
+        await setEvents((current) => [
+          ...current.filter((value) => value.id !== id),
+          {
+            id,
+            sourceId: 'local',
+            title: title.trim(),
+            date: day,
+            startTime: allDay ? undefined : start,
+            endTime: allDay ? undefined : end,
+            allDay,
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            memberIds,
+            recurrence: { frequency: recurrence },
+            location: location.trim(),
+          },
+        ]);
+      if (kind === 'chore')
+        await setChores((current) => [
+          ...current.filter((value) => value.id !== id),
+          {
+            id,
+            title: title.trim(),
+            memberIds,
+            dueDate: day,
+            recurrence: { frequency: recurrence },
+            completedDates: [],
+          },
+        ]);
+      if (kind === 'meal')
+        await setMeals((current) => [
+          ...current.filter((meal) => meal.date !== day),
+          {
+            id: existingMeal?.id ?? id,
+            date: day,
+            title: title.trim(),
+            emoji,
+            notes: notes.trim(),
+            recipeId: existingMeal?.recipeId,
+          },
+        ]);
+      if (kind === 'list') {
+        if (newList) {
+          if (
+            lists.some((l) => l.id !== id && l.name.toLowerCase() === title.trim().toLowerCase())
+          ) {
+            setError('There is already a list with that name.');
+            return;
+          }
+          await setLists((current) => [
+            ...current.filter((l) => l.id !== id),
+            { id, name: title.trim(), items: current.find((l) => l.id === id)?.items ?? [] },
+          ]);
+        } else await addItem(listId, title, id);
+      }
+      setNotice(
+        kind === 'event'
+          ? 'Added to the family calendar'
+          : kind === 'chore'
+            ? 'A little teamwork, planned'
+            : kind === 'meal'
+              ? 'Dinner is planned'
+              : newList
+                ? 'Your new list is ready'
+                : 'Added to your list',
+      );
+      onClose();
+    } catch (failure) {
+      setError(
+        (failure instanceof Error ? failure.message : 'Could not save.') +
+          ' Your entries are still here. Try saving again.',
+      );
+    } finally {
+      setSaving(false);
     }
-    setNotice(
-      kind === 'event'
-        ? 'Added to the family calendar'
-        : kind === 'chore'
-          ? 'A little teamwork, planned'
-          : kind === 'meal'
-            ? 'Dinner is planned'
-            : newList
-              ? 'Your new list is ready'
-              : 'Added to your list',
-    );
-    onClose();
   }
   if (kind === 'about')
     return (
@@ -166,8 +183,8 @@ export function Editor({
             <br />A little more together.
           </h3>
           <p>
-            This is your family's prototype. Calendar events, chores, meals, and lists use demo
-            data. Edits stay in this browser tab until you refresh.
+            Calendar events, chores, meals, and lists are saved to your household. Refresh or return
+            to the app to see changes from your other devices.
           </p>
           <h4>Make it feel like home</h4>
           <p>
@@ -176,7 +193,8 @@ export function Editor({
             HTTPS (or localhost).
           </p>
           <p className="muted">
-            No accounts, connected calendars, live weather, or household sync yet.
+            No accounts or connected calendars yet. Weather is a sample. An internet connection is
+            needed to load and save household data.
           </p>
           <button className="primary full-width" onClick={onClose}>
             Make yourself at home
@@ -185,310 +203,327 @@ export function Editor({
       </Modal>
     );
   return (
-    <Modal title={heading} onClose={onClose}>
+    <Modal
+      title={heading}
+      onClose={() => {
+        if (!saving) onClose();
+      }}
+    >
       <form className="editor-form" onSubmit={submit}>
-        <p className="form-intro">
-          {kind === 'family'
-            ? 'The people who make this place home.'
-            : 'A small plan makes a little more room for the good stuff.'}
-        </p>
-        {kind === 'family' ? (
-          <div className="family-editor">
-            {familyDraft.map((person, i) => (
-              <div className="family-edit-row" key={person.id}>
-                <Avatar id={person.id} />
+        <fieldset disabled={saving} className="editor-fields">
+          <p className="form-intro">
+            {kind === 'family'
+              ? 'The people who make this place home.'
+              : 'A small plan makes a little more room for the good stuff.'}
+          </p>
+          {kind === 'family' ? (
+            <div className="family-editor">
+              {familyDraft.map((person, i) => (
+                <div className="family-edit-row" key={person.id}>
+                  <Avatar id={person.id} />
+                  <label>
+                    <span>Member {i + 1}</span>
+                    <input
+                      aria-label={`Member ${i + 1} name`}
+                      maxLength={30}
+                      required
+                      value={person.name}
+                      onChange={(e) =>
+                        setFamilyDraft((current) =>
+                          current.map((p) =>
+                            p.id === person.id ? { ...p, name: e.target.value } : p,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="color-label">
+                    <span>Color</span>
+                    <input
+                      type="color"
+                      aria-label={`Member ${i + 1} color`}
+                      value={person.color}
+                      onChange={(e) => {
+                        const color = e.target.value;
+                        setFamilyDraft((current) =>
+                          current.map((p) =>
+                            p.id === person.id ? { ...p, color, tint: `${color}20` } : p,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="soft-button"
+                onClick={() =>
+                  setFamilyDraft((current) => [
+                    ...current,
+                    {
+                      id: newId(),
+                      name: '',
+                      initial: '?',
+                      color: '#347a72',
+                      tint: '#deeeeb',
+                    },
+                  ])
+                }
+              >
+                + Add family member
+              </button>
+            </div>
+          ) : (
+            <>
+              <label>
+                {kind === 'list'
+                  ? newList
+                    ? 'List name'
+                    : 'What do we need?'
+                  : kind === 'meal'
+                    ? 'What’s for dinner?'
+                    : kind === 'chore'
+                      ? 'What needs doing?'
+                      : 'Event name'}
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  maxLength={120}
+                  required
+                  placeholder={
+                    kind === 'event'
+                      ? 'e.g. A picnic in the park'
+                      : kind === 'chore'
+                        ? 'e.g. Take out the recycling'
+                        : kind === 'meal'
+                          ? 'e.g. Homemade pizza'
+                          : newList
+                            ? 'e.g. Weekend projects'
+                            : 'e.g. Fresh strawberries'
+                  }
+                />
+              </label>
+              {kind !== 'list' && (
                 <label>
-                  <span>Member {i + 1}</span>
+                  {kind === 'chore' ? 'First due date' : 'Date'}
                   <input
-                    aria-label={`Member ${i + 1} name`}
-                    maxLength={30}
+                    type="date"
+                    value={day}
                     required
-                    value={person.name}
-                    onChange={(e) =>
-                      setFamilyDraft((current) =>
-                        current.map((p) =>
-                          p.id === person.id ? { ...p, name: e.target.value } : p,
-                        ),
-                      )
-                    }
-                  />
-                </label>
-                <label className="color-label">
-                  <span>Color</span>
-                  <input
-                    type="color"
-                    aria-label={`Member ${i + 1} color`}
-                    value={person.color}
                     onChange={(e) => {
-                      const color = e.target.value;
-                      setFamilyDraft((current) =>
-                        current.map((p) =>
-                          p.id === person.id ? { ...p, color, tint: `${color}20` } : p,
-                        ),
-                      );
+                      setDay(e.target.value);
+                      if (kind === 'meal') {
+                        const meal = meals.find((m) => m.date === e.target.value);
+                        setTitle(meal?.title ?? '');
+                        setEmoji(meal?.emoji ?? '🍽️');
+                        setNotes(meal?.notes ?? '');
+                      }
                     }}
                   />
                 </label>
-              </div>
-            ))}
-            <button
-              type="button"
-              className="soft-button"
-              onClick={() =>
-                setFamilyDraft((current) => [
-                  ...current,
-                  {
-                    id: newId(),
-                    name: '',
-                    initial: '?',
-                    color: '#347a72',
-                    tint: '#deeeeb',
-                  },
-                ])
-              }
-            >
-              + Add family member
-            </button>
-          </div>
-        ) : (
-          <>
-            <label>
-              {kind === 'list'
-                ? newList
-                  ? 'List name'
-                  : 'What do we need?'
-                : kind === 'meal'
-                  ? 'What’s for dinner?'
-                  : kind === 'chore'
-                    ? 'What needs doing?'
-                    : 'Event name'}
-              <input
-                autoFocus
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={120}
-                required
-                placeholder={
-                  kind === 'event'
-                    ? 'e.g. A picnic in the park'
-                    : kind === 'chore'
-                      ? 'e.g. Take out the recycling'
-                      : kind === 'meal'
-                        ? 'e.g. Homemade pizza'
-                        : newList
-                          ? 'e.g. Weekend projects'
-                          : 'e.g. Fresh strawberries'
-                }
-              />
-            </label>
-            {kind !== 'list' && (
-              <label>
-                {kind === 'chore' ? 'First due date' : 'Date'}
-                <input
-                  type="date"
-                  value={day}
-                  required
-                  onChange={(e) => {
-                    setDay(e.target.value);
-                    if (kind === 'meal') {
-                      const meal = meals.find((m) => m.date === e.target.value);
-                      setTitle(meal?.title ?? '');
-                      setEmoji(meal?.emoji ?? '🍽️');
-                      setNotes(meal?.notes ?? '');
-                    }
-                  }}
-                />
-              </label>
-            )}
-            {kind === 'event' && (
-              <>
-                <label className="simple-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={allDay}
-                    onChange={(e) => setAllDay(e.target.checked)}
-                  />
-                  All-day event
-                </label>
-                {!allDay && (
-                  <div className="form-columns">
-                    <label>
-                      Starts
-                      <input
-                        type="time"
-                        required
-                        value={start}
-                        onChange={(e) => setStart(e.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Ends
-                      <input
-                        type="time"
-                        required
-                        value={end}
-                        onChange={(e) => setEnd(e.target.value)}
-                      />
-                    </label>
-                  </div>
-                )}
-                <label>
-                  Location <span className="optional">(optional)</span>
-                  <input
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    maxLength={160}
-                    placeholder="A place to be together"
-                  />
-                </label>
-              </>
-            )}
-            {(kind === 'event' || kind === 'chore') && (
-              <>
-                <fieldset>
-                  <legend>Who's it for?</legend>
-                  <div className="assign-members">
-                    <button
-                      type="button"
-                      aria-pressed={!memberIds.length}
-                      className={!memberIds.length ? 'selected' : ''}
-                      onClick={() => setMemberIds([])}
-                    >
-                      Everyone
-                    </button>
-                    {family.map((p) => (
+              )}
+              {kind === 'event' && (
+                <>
+                  <label className="simple-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={allDay}
+                      onChange={(e) => setAllDay(e.target.checked)}
+                    />
+                    All-day event
+                  </label>
+                  {!allDay && (
+                    <div className="form-columns">
+                      <label>
+                        Starts
+                        <input
+                          type="time"
+                          required
+                          value={start}
+                          onChange={(e) => setStart(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Ends
+                        <input
+                          type="time"
+                          required
+                          value={end}
+                          onChange={(e) => setEnd(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <label>
+                    Location <span className="optional">(optional)</span>
+                    <input
+                      value={location}
+                      onChange={(e) => setLocation(e.target.value)}
+                      maxLength={160}
+                      placeholder="A place to be together"
+                    />
+                  </label>
+                </>
+              )}
+              {(kind === 'event' || kind === 'chore') && (
+                <>
+                  <fieldset>
+                    <legend>Who's it for?</legend>
+                    <div className="assign-members">
                       <button
-                        key={p.id}
                         type="button"
-                        aria-pressed={memberIds.includes(p.id)}
-                        className={memberIds.includes(p.id) ? 'selected' : ''}
-                        onClick={() =>
-                          setMemberIds((current) =>
-                            current.includes(p.id)
-                              ? current.filter((id) => id !== p.id)
-                              : [...current, p.id],
-                          )
-                        }
+                        aria-pressed={!memberIds.length}
+                        className={!memberIds.length ? 'selected' : ''}
+                        onClick={() => setMemberIds([])}
                       >
-                        <Avatar id={p.id} small />
-                        {p.name}
+                        Everyone
                       </button>
-                    ))}
-                  </div>
-                </fieldset>
+                      {family.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          aria-pressed={memberIds.includes(p.id)}
+                          className={memberIds.includes(p.id) ? 'selected' : ''}
+                          onClick={() =>
+                            setMemberIds((current) =>
+                              current.includes(p.id)
+                                ? current.filter((id) => id !== p.id)
+                                : [...current, p.id],
+                            )
+                          }
+                        >
+                          <Avatar id={p.id} small />
+                          {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <label>
+                    Repeat
+                    <select
+                      aria-label="Repeat"
+                      value={recurrence}
+                      onChange={(e) => setRecurrence(e.target.value as Recurrence)}
+                    >
+                      {repeatOptions.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+              {kind === 'meal' && (
+                <>
+                  <fieldset>
+                    <legend>A little flavor</legend>
+                    <div className="emoji-picker">
+                      {['🍽️', '🌮', '🍝', '🥘', '🍕', '🍔', '🥗', '🍲'].map((icon, i) => (
+                        <button
+                          type="button"
+                          key={icon}
+                          aria-label={
+                            [
+                              'Dinner',
+                              'Tacos',
+                              'Pasta',
+                              'Stir fry',
+                              'Pizza',
+                              'Burgers',
+                              'Salad',
+                              'Soup',
+                            ][i]
+                          }
+                          aria-pressed={emoji === icon}
+                          className={emoji === icon ? 'selected' : ''}
+                          onClick={() => setEmoji(icon)}
+                        >
+                          {icon}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <label>
+                    Notes <span className="optional">(optional)</span>
+                    <textarea
+                      rows={2}
+                      maxLength={500}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Anything to prep ahead?"
+                    />
+                  </label>
+                </>
+              )}
+              {kind === 'list' && !newList && (
                 <label>
-                  Repeat
-                  <select
-                    aria-label="Repeat"
-                    value={recurrence}
-                    onChange={(e) => setRecurrence(e.target.value as Recurrence)}
-                  >
-                    {repeatOptions.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
+                  Add to
+                  <select value={listId} onChange={(e) => setListId(e.target.value)}>
+                    {lists.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
                       </option>
                     ))}
                   </select>
                 </label>
-              </>
-            )}
-            {kind === 'meal' && (
-              <>
-                <fieldset>
-                  <legend>A little flavor</legend>
-                  <div className="emoji-picker">
-                    {['🍽️', '🌮', '🍝', '🥘', '🍕', '🍔', '🥗', '🍲'].map((icon, i) => (
-                      <button
-                        type="button"
-                        key={icon}
-                        aria-label={
-                          [
-                            'Dinner',
-                            'Tacos',
-                            'Pasta',
-                            'Stir fry',
-                            'Pizza',
-                            'Burgers',
-                            'Salad',
-                            'Soup',
-                          ][i]
-                        }
-                        aria-pressed={emoji === icon}
-                        className={emoji === icon ? 'selected' : ''}
-                        onClick={() => setEmoji(icon)}
-                      >
-                        {icon}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <label>
-                  Notes <span className="optional">(optional)</span>
-                  <textarea
-                    rows={2}
-                    maxLength={500}
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Anything to prep ahead?"
-                  />
-                </label>
-              </>
-            )}
-            {kind === 'list' && !newList && (
-              <label>
-                Add to
-                <select value={listId} onChange={(e) => setListId(e.target.value)}>
-                  {lists.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </>
-        )}
-        {error && (
-          <p role="alert" className="form-error">
-            {error}
-          </p>
-        )}
-        <div className="form-actions">
-          {kind === 'meal' && existingMeal && (
-            <button
-              type="button"
-              className="icon-button delete-button"
-              aria-label="Remove meal"
-              onClick={() => {
-                setMeals((current) => current.filter((m) => m.date !== day));
-                setNotice('Meal removed');
-                onClose();
-              }}
-            >
-              <Trash2 size={19} />
-            </button>
+              )}
+            </>
           )}
-          <button type="button" className="outline-button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary">
-            {kind === 'family'
-              ? 'Save family'
-              : kind === 'meal'
-                ? 'Save meal'
-                : kind === 'list' && newList
-                  ? 'Create list'
-                  : 'Add ' + (kind === 'list' ? 'item' : kind)}
-          </button>
-        </div>
-        <p className="demo-note">Demo mode · Changes reset when you refresh</p>
+          {error && (
+            <p role="alert" className="form-error">
+              {error}
+            </p>
+          )}
+          <div className="form-actions">
+            {kind === 'meal' && existingMeal && (
+              <button
+                type="button"
+                className="icon-button delete-button"
+                aria-label="Remove meal"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await setMeals((current) => current.filter((m) => m.date !== day));
+                    setNotice('Meal removed');
+                    onClose();
+                  } catch (failure) {
+                    setError(failure instanceof Error ? failure.message : 'Could not remove meal.');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                <Trash2 size={19} />
+              </button>
+            )}
+            <button type="button" className="outline-button" disabled={saving} onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="primary" disabled={saving}>
+              {saving
+                ? 'Saving…'
+                : kind === 'family'
+                  ? 'Save family'
+                  : kind === 'meal'
+                    ? 'Save meal'
+                    : kind === 'list' && newList
+                      ? 'Create list'
+                      : 'Add ' + (kind === 'list' ? 'item' : kind)}
+            </button>
+          </div>
+          <p className="demo-note">Changes are saved to your household</p>
+        </fieldset>
       </form>
     </Modal>
   );
 }
 
 export function EventDetail({ event, onClose }: { event: EventOccurrence; onClose: () => void }) {
-  const { family } = useHousehold();
+  const { family, sources } = useHousehold();
   return (
     <Modal title={event.title} onClose={onClose}>
       <div className="event-detail">
@@ -528,7 +563,7 @@ export function EventDetail({ event, onClose }: { event: EventOccurrence; onClos
         </div>
         {event.notes && <p className="event-notes">{event.notes}</p>}
         <p className="muted">
-          {calendarSources.find((s) => s.id === event.sourceId)?.name} · {event.timeZone}
+          {sources.find((s) => s.id === event.sourceId)?.name} · {event.timeZone}
         </p>
         <button className="primary full-width" onClick={onClose}>
           Lovely, got it

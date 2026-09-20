@@ -262,9 +262,9 @@ export function Lists({ open }: { open: () => void }) {
           <p>One place for groceries, little errands, and all the things that keep home running.</p>
           <div className="note-divider" />
           <small>
-            Prototype changes last until refresh.
+            Changes are saved and shared across your devices.
             <br />
-            Household sync will come later.
+            Return to the app to see the latest changes.
           </small>
         </aside>
       </div>
