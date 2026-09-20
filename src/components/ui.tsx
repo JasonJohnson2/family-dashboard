@@ -4,7 +4,7 @@ import { useHousehold } from '../store';
 import { everyoneColor } from '../data/mock';
 import { formatTime } from '../lib/dates';
 import type { Chore, EventOccurrence } from '../types';
-// comment debug 
+// comment debug
 export const colorStyle = (color: string): CSSProperties =>
   ({ '--member-color': color }) as CSSProperties;
 export function Card({
