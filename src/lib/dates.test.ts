@@ -3,9 +3,10 @@ import { addDays, eventsOn, occursOn, shiftMonth, weekStart } from './dates';
 import { createMockData } from '../data/mock';
 
 describe('household dates and recurrence', () => {
-  it('crosses year boundaries and starts weeks on Monday', () => {
+  it('crosses year boundaries and starts weeks on Sunday', () => {
     expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
-    expect(weekStart('2026-09-20')).toBe('2026-09-14');
+    expect(weekStart('2026-09-20')).toBe('2026-09-20');
+    expect(weekStart('2026-09-26')).toBe('2026-09-20');
     expect(shiftMonth('2026-01-31', 1)).toBe('2026-02-28');
   });
   it('does not generate occurrences before the start or after the end', () => {
