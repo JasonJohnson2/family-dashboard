@@ -4,10 +4,11 @@ import { createMockData } from '../data/mock';
 
 describe('household dates and recurrence', () => {
   it('crosses year boundaries and starts weeks on Sunday', () => {
-  expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
-  expect(weekStart('2026-09-20')).toBe('2026-09-20');
-  expect(shiftMonth('2026-01-31', 1)).toBe('2026-02-28');
+    expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
+    expect(weekStart('2026-09-20')).toBe('2026-09-20');
+    expect(shiftMonth('2026-01-31', 1)).toBe('2026-02-28');
   });
+
   it('does not generate occurrences before the start or after the end', () => {
     expect(occursOn('2026-09-19', '2026-09-18', { frequency: 'daily' })).toBe(false);
     expect(occursOn('2026-09-19', '2026-09-21', { frequency: 'daily', until: '2026-09-20' })).toBe(
