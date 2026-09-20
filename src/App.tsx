@@ -38,6 +38,7 @@ export default function App() {
     kind: EditorKind;
     date?: string;
     newList?: boolean;
+    eventId?: string;
   } | null>(null);
   const [event, setEvent] = useState<EventOccurrence | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
@@ -224,9 +225,22 @@ export default function App() {
         {notice}
       </div>
       {editor && (
-        <Editor key={`${editor.kind}-${editor.date}`} {...editor} onClose={() => setEditor(null)} />
+        <Editor
+          key={`${editor.kind}-${editor.eventId ?? editor.date}`}
+          {...editor}
+          onClose={() => setEditor(null)}
+        />
       )}
-      {event && <EventDetail event={event} onClose={() => setEvent(null)} />}
+      {event && (
+        <EventDetail
+          event={event}
+          onClose={() => setEvent(null)}
+          onEdit={() => {
+            setEditor({ kind: 'event', eventId: event.id });
+            setEvent(null);
+          }}
+        />
+      )}
     </>
   );
 }

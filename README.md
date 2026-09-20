@@ -78,6 +78,10 @@ The build identity needs Workers deployment and D1 edit permissions for this acc
 - Household data is never cached by the service worker. The installed app shell can open offline, but initial data loading and saves require a connection. An already-open page keeps its last confirmed state; failed saves remain visible. Reconnect/refetch to recover. Wait for “Household up to date” before closing the app; a pending-save unload guard helps prevent accidental navigation.
 - Existing prototype changes lived only in browser memory and cannot be recovered from a prior refresh. The new database starts deliberately; it does not import an old tab's demo state.
 
+## Editing calendar events
+
+Open an event from Home or any Calendar view and tap **Edit event**. The form opens with the saved name, date/time, all-day setting, assignments, repeat schedule, location and notes. **Save event** updates the same persistent event; Cancel leaves it unchanged. For recurring events, editing applies to the entire series (including earlier occurrences), and the form uses the original series start date. Single-occurrence exceptions remain future work. Existing timezone, source identity, multi-day end date and repeat-until information are retained. The form stays open with your draft if saving fails.
+
 ## Schema and calendar boundary
 
 `households` contains the singleton `home`, its display name, timezone, and revision. Members, calendar sources/events, chores, meals, lists/items, assignments, completions, and mutation receipts reference `household_id`. Composite foreign keys prevent assignments from crossing household boundaries. List/item and event/chore assignment children cascade on deletion; deleting an assigned member is rejected until assignments are removed. Meals are unique per household/date, and list names are unique per household ignoring ASCII case.

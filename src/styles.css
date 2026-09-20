@@ -2882,3 +2882,6 @@ button:disabled {
   opacity: 0.6;
   cursor: wait;
 }
+.event-detail > button + button {
+  margin-top: 10px;
+}
