@@ -57,7 +57,9 @@ export function eventsOn(events: CalendarEvent[], day: DateKey): EventOccurrence
         (event.recurrence.frequency === 'none' &&
           event.endDate &&
           event.date <= day &&
-          event.endDate >= day),
+          event.endDate >= day &&
+          // Imported timed events use an exclusive end instant; midnight belongs to the prior day.
+          !(event.endInstant && event.endTime === '00:00' && event.endDate === day)),
     )
     .map((event) => ({ ...event, occurrenceDate: day, occurrenceId: `${event.id}:${day}` }))
     .sort((a, b) =>

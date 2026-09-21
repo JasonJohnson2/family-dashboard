@@ -28,6 +28,8 @@ export interface CalendarEvent {
   endDate?: DateKey;
   startTime?: string;
   endTime?: string;
+  startInstant?: string;
+  endInstant?: string;
   allDay: boolean;
   timeZone: string;
   memberIds: MemberId[];

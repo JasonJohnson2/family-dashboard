@@ -3,7 +3,9 @@
   "name": "family-dashboard",
   "main": "worker/index.ts",
   "compatibility_date": "2026-09-19",
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  // OAuth callbacks contain short-lived authorization codes; disable automatic request logging.
+  "observability": { "enabled": false },
+  "vars": { "GOOGLE_APP_ORIGIN": "https://family-dashboard.jjayson400.workers.dev" },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

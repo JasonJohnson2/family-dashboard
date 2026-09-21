@@ -255,6 +255,17 @@ export function validateReferences(state: HouseholdState, operations: Operation[
   const members = new Set(state.family.map((m) => m.id)),
     lists = new Set(state.lists.map((l) => l.id));
   for (const op of operations) {
+    if (
+      (op.type === 'event.put' &&
+        (op.value.id.startsWith('g_') ||
+          op.value.startInstant ||
+          op.value.endInstant ||
+          state.events.some((e) => e.id === op.value.id && e.sourceId !== 'local'))) ||
+      (op.type === 'delete' &&
+        op.entity === 'event' &&
+        state.events.some((e) => e.id === op.id && e.sourceId !== 'local'))
+    )
+      throw new ApiError(400, 'Imported calendar events are read only.');
     if (op.type === 'member.put') members.add(op.value.id);
     if (op.type === 'list.put') lists.add(op.value.id);
     if (op.type === 'event.put' || op.type === 'chore.put') {

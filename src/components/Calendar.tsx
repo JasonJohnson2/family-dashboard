@@ -22,7 +22,7 @@ export function Calendar({
   open: (date: string) => void;
   viewEvent: (event: EventOccurrence) => void;
 }) {
-  const { today, events, family } = useHousehold();
+  const { today, events, family, sources } = useHousehold();
   const [view, setView] = useState<'day' | 'week' | 'month'>('week');
   const [date, setDate] = useState(today);
   const [member, setMember] = useState('all');
@@ -168,7 +168,9 @@ export function Calendar({
           <span className="dot" />
           Our Home calendar
           <span className="legend-note">
-            Apple/iCloud integration planned · No calendars connected
+            {sources.some((s) => s.provider === 'google')
+              ? 'Google Calendar · Read only · Apple/iCloud integration planned'
+              : 'Apple/iCloud integration planned · No calendars connected'}
           </span>
         </footer>
       </div>

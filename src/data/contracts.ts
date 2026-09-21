@@ -64,6 +64,8 @@ export const eventSchema: z.ZodType<CalendarEvent> = z
     endDate: dateSchema.optional(),
     startTime: time.optional(),
     endTime: time.optional(),
+    startInstant: z.iso.datetime().optional(),
+    endInstant: z.iso.datetime().optional(),
     allDay: z.boolean(),
     timeZone,
     memberIds,
@@ -74,12 +76,15 @@ export const eventSchema: z.ZodType<CalendarEvent> = z
   .strict()
   .refine(
     (e) =>
+      !!e.startInstant === !!e.endInstant &&
       (!e.endDate || e.endDate >= e.date) &&
       (!e.recurrence.until || e.recurrence.until >= e.date) &&
       (e.allDay ||
         (!!e.startTime &&
           !!e.endTime &&
-          ((e.endDate && e.endDate > e.date) || e.endTime > e.startTime))),
+          (e.startInstant && e.endInstant
+            ? Date.parse(e.endInstant) >= Date.parse(e.startInstant)
+            : (e.endDate && e.endDate > e.date) || e.endTime > e.startTime))),
     'Check the event dates and times.',
   );
 export const choreSchema: z.ZodType<Chore> = z

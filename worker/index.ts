@@ -1,3 +1,5 @@
+import { readJson } from './http';
+import { googleRoute } from './google/routes';
 import { mutationSchema } from '../src/data/contracts';
 import {
   ApiError,
@@ -12,36 +14,11 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
   });
-async function readJson(request: Request): Promise<unknown> {
-  if (!request.headers.get('Content-Type')?.startsWith('application/json'))
-    throw new ApiError(415, 'Send application/json.');
-  const reader = request.body?.getReader();
-  if (!reader) throw new ApiError(400, 'A request body is required.');
-  let body = '';
-  let size = 0;
-  const decoder = new TextDecoder();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > 65536) {
-        await reader.cancel();
-        throw new ApiError(413, 'This change is too large.');
-      }
-      body += decoder.decode(value, { stream: true });
-    }
-    body += decoder.decode();
-    return JSON.parse(body);
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(400, 'Invalid JSON.');
-  }
-}
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (url.pathname.startsWith('/api/google/')) return googleRoute(request, env);
     try {
       if (url.pathname === '/api/household' && request.method === 'GET')
         return json(await readState(env.DB));

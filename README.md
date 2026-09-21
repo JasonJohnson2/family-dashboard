@@ -78,6 +78,18 @@ The build identity needs Workers deployment and D1 edit permissions for this acc
 - Household data is never cached by the service worker. The installed app shell can open offline, but initial data loading and saves require a connection. An already-open page keeps its last confirmed state; failed saves remain visible. Reconnect/refetch to recover. Wait for “Household up to date” before closing the app; a pending-save unload guard helps prevent accidental navigation.
 - Existing prototype changes lived only in browser memory and cannot be recovered from a prior refresh. The new database starts deliberately; it does not import an old tab's demo state.
 
+## Google Calendar integration
+
+Phase 1 adds read-only OAuth, discovery, privacy-filtered imports and incremental sync. Start with the [Google Calendar setup and API guide](docs/google-calendar.md) for Google Cloud configuration, callback URL, required Worker secrets (including the encryption and management keys), migrations, local connection/sync commands, privacy modes and Phase 2 UI work. New calendars are disabled until explicitly selected.
+
+- **Callback:** `https://family-dashboard.jjayson400.workers.dev/api/google/callback`.
+- **Scopes:** `https://www.googleapis.com/auth/calendar.calendarlist.readonly` and `https://www.googleapis.com/auth/calendar.events.readonly` only.
+- **Existing Worker secrets:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+- **New Worker secrets:** `GOOGLE_TOKEN_ENCRYPTION_KEY` (32 random bytes encoded as standard base64) and a separate `GOOGLE_ADMIN_KEY` (random management credential, at least 32 characters). The guide gives generation/configuration commands. Never commit their values.
+- **Migration:** `0002_google_calendar.sql`; use `pnpm db:migrate:local` locally. The deployment pipeline runs `pnpm db:migrate:remote` before publishing.
+- **Privacy:** `busy` hides title/details; `title` shows title/time; `full` adds supported notes/location. Existing projections are cleared immediately when privacy changes or a calendar is disabled.
+- **Operation:** connect, discover, enable a selected calendar, then explicitly sync using the documented API workflow. No Google writes or background/webhook sync. Phase 2 will add the protected connection-management UI.
+
 ## Editing calendar events
 
 Open an event from Home or any Calendar view and tap **Edit event**. The form opens with the saved name, date/time, all-day setting, assignments, repeat schedule, location and notes. **Save event** updates the same persistent event; Cancel leaves it unchanged. For recurring events, editing applies to the entire series (including earlier occurrences), and the form uses the original series start date. Single-occurrence exceptions remain future work. Existing timezone, source identity, multi-day end date and repeat-until information are retained. The form stays open with your draft if saving fails.
@@ -86,11 +98,11 @@ Open an event from Home or any Calendar view and tap **Edit event**. The form op
 
 `households` contains the singleton `home`, its display name, timezone, and revision. Members, calendar sources/events, chores, meals, lists/items, assignments, completions, and mutation receipts reference `household_id`. Composite foreign keys prevent assignments from crossing household boundaries. List/item and event/chore assignment children cascade on deletion; deleting an assigned member is rejected until assignments are removed. Meals are unique per household/date, and list names are unique per household ignoring ASCII case.
 
-Calendar events retain provider-independent `sourceId`, optional `externalId`, timezone, member IDs, and structured recurrence. The initial source is `local`; API-created events must use it. The `CalendarProvider` contract remains intact, and `icloud`/`google` source types are reserved without any external synchronization implementation or chosen CalDAV strategy.
+Calendar events retain provider-independent `sourceId`, optional `externalId`, timezone, member IDs, and structured recurrence. The initial source is `local`; API-created events must use it. The `CalendarProvider` contract remains intact. Read-only Google imports use that same model; Apple/iCloud integration and its CalDAV strategy remain future work.
 
-Recurrence supports none, daily, weekdays, weekly, and monthly, with an optional end date. Monthly dates on the 29th–31st skip months lacking that day. Completion is stored separately per chore/due date, so editing a chore does not erase completion history and completing today does not complete tomorrow. Event exceptions/full RRULE parsing and timezone conversion remain future work. Dates and greetings still follow the viewing device's local timezone; persisted household/event timezones preserve the model boundary without changing current display behavior.
+Local recurrence supports none, daily, weekdays, weekly, and monthly, with an optional end date. Monthly dates on the 29th–31st skip months lacking that day. Completion is stored separately per chore/due date, so editing a chore does not erase completion history and completing today does not complete tomorrow. Local event exceptions/full RRULE parsing and local-event timezone conversion remain future work. Dates and greetings still follow the viewing device's local timezone. Google occurrences arrive expanded and their timed intervals are converted to the household timezone before persistence.
 
-Meals and list items retain optional recipe references for later use, with no recipe functionality added. Weather remains a labeled static sample. No account management, authentication, external calendars, live weather, recipes, AI, or WebSockets are implemented.
+Meals and list items retain optional recipe references for later use, with no recipe functionality added. Weather remains a labeled static sample. No household account management, live weather, recipes, AI, or WebSockets are implemented.
 
 ## API
 
