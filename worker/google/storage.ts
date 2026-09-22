@@ -81,7 +81,7 @@ export async function withLease<T>(db: D1Database, fn: (lease: Lease) => Promise
       .run();
   }
 }
-export async function commit(lease: Lease, statements: D1PreparedStatement[]) {
+export async function commit(lease: Lease, statements: D1PreparedStatement[], revise = true) {
   const { db, owner } = lease;
   try {
     await db.batch([
@@ -91,7 +91,9 @@ export async function commit(lease: Lease, statements: D1PreparedStatement[]) {
         )
         .bind(owner, HOUSEHOLD_ID, owner, Date.now()),
       ...statements,
-      db.prepare('UPDATE households SET revision=revision+1 WHERE id=?').bind(HOUSEHOLD_ID),
+      ...(revise
+        ? [db.prepare('UPDATE households SET revision=revision+1 WHERE id=?').bind(HOUSEHOLD_ID)]
+        : []),
       db.prepare('DELETE FROM google_commit_guards WHERE owner=?').bind(owner),
     ]);
   } catch {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { idSchema } from '../../src/data/contracts';
 import { ApiError, HOUSEHOLD_ID } from '../database';
 import { accessToken } from './oauth';
+import { isDue, syncFailure } from './status';
 import { assignImportedEvents, calendars, commit, connection, withLease } from './storage';
 import { eventId, normalizeEvent, sourceId } from './normalize';
 import type { GoogleEnv, StoredCalendar } from './types';
@@ -268,12 +269,17 @@ function putEvents(db: D1Database, events: CalendarEvent[]) {
   }
   return statements;
 }
-export async function sync(env: GoogleEnv, requestedSource?: string) {
+export async function sync(env: GoogleEnv, requestedSource?: string, automatic = false) {
   return withLease(env.DB, async (lease) => {
-    if (!(await connection(env.DB)))
+    if (!(await connection(env.DB))) {
+      if (automatic) return [];
       throw new ApiError(409, 'Connect Google first.', 'google_not_connected');
+    }
     const selected = (await calendars(env.DB)).filter(
-      (c) => !!c.enabled && (!requestedSource || c.source_id === requestedSource),
+      (c) =>
+        !!c.enabled &&
+        (!requestedSource || c.source_id === requestedSource) &&
+        (!automatic || isDue(c)),
     );
     if (requestedSource && !selected.length)
       throw new ApiError(404, 'Enable this Google calendar before syncing.', 'google_calendar');
@@ -283,127 +289,152 @@ export async function sync(env: GoogleEnv, requestedSource?: string) {
       .bind(HOUSEHOLD_ID)
       .first<{ timeZone: string }>();
     for (const calendar of selected) {
-      const zone = household!.timeZone,
-        now = new Date();
-      let full =
-        calendar.projection_version !== 1 ||
-        !calendar.sync_token ||
-        !calendar.full_synced_at ||
-        Date.now() - Date.parse(calendar.full_synced_at) > 30 * 86400000 ||
-        calendar.sync_time_zone !== zone;
-      let windowStart = full
-        ? new Date(now.valueOf() - 30 * 86400000).toISOString()
-        : calendar.window_start!;
-      let windowEnd = full
-        ? new Date(now.valueOf() + 365 * 86400000).toISOString()
-        : calendar.window_end!;
-      let imported: CalendarEvent[] = [],
-        removed: string[] = [],
-        syncToken: string | undefined;
-      for (let pass = 0; pass < 2; pass++) {
-        imported = [];
-        removed = [];
-        let next: string | undefined;
-        const seen = new Set<string>();
-        try {
-          do {
-            const query = new URLSearchParams({
-              singleEvents: 'true',
-              showDeleted: 'true',
-              maxResults: '250',
-              timeZone: zone,
-              fields: `items(id,status,eventType,workingLocationProperties(type),start,end${calendar.privacy_mode !== 'busy' ? ',summary' : ''}${calendar.privacy_mode === 'full' ? ',description,location' : ''}),nextPageToken,nextSyncToken`,
-            });
-            if (full) {
-              query.set('timeMin', windowStart);
-              query.set('timeMax', windowEnd);
-            } else query.set('syncToken', calendar.sync_token!);
-            if (next) query.set('pageToken', next);
-            const page = await get(
-              `calendars/${encodeURIComponent(calendar.google_id)}/events`,
-              query,
-              eventPage,
-            );
-            for (const raw of page.items) {
-              const normalized = await normalizeEvent(raw, calendar, zone);
-              // Incremental responses may contain changes outside the initial window.
-              if (
-                !normalized ||
-                (normalized.endDate ?? normalized.date) < windowStart.slice(0, 10) ||
-                normalized.date > windowEnd.slice(0, 10)
-              )
-                removed.push(await eventId(calendar.source_id, raw.id));
-              else imported.push(normalized);
-            }
-            next = page.nextPageToken;
-            syncToken = page.nextSyncToken;
-            if (next && (seen.has(next) || seen.size >= 39))
+      // Claim the retry interval while holding the shared lease, before any Google HTTP.
+      // This durable timestamp also throttles retries if a Worker dies mid-request.
+      await commit(
+        lease,
+        [
+          env.DB.prepare(
+            'UPDATE google_calendars SET last_attempt_at=? WHERE household_id=? AND source_id=?',
+          ).bind(new Date().toISOString(), HOUSEHOLD_ID, calendar.source_id),
+        ],
+        false,
+      );
+      try {
+        const zone = household!.timeZone,
+          now = new Date();
+        let full =
+          calendar.projection_version !== 1 ||
+          !calendar.sync_token ||
+          !calendar.full_synced_at ||
+          Date.now() - Date.parse(calendar.full_synced_at) > 30 * 86400000 ||
+          calendar.sync_time_zone !== zone;
+        let windowStart = full
+          ? new Date(now.valueOf() - 30 * 86400000).toISOString()
+          : calendar.window_start!;
+        let windowEnd = full
+          ? new Date(now.valueOf() + 365 * 86400000).toISOString()
+          : calendar.window_end!;
+        let imported: CalendarEvent[] = [],
+          removed: string[] = [],
+          syncToken: string | undefined;
+        for (let pass = 0; pass < 2; pass++) {
+          imported = [];
+          removed = [];
+          let next: string | undefined;
+          const seen = new Set<string>();
+          try {
+            do {
+              const query = new URLSearchParams({
+                singleEvents: 'true',
+                showDeleted: 'true',
+                maxResults: '250',
+                timeZone: zone,
+                fields: `items(id,status,eventType,workingLocationProperties(type),start,end${calendar.privacy_mode !== 'busy' ? ',summary' : ''}${calendar.privacy_mode === 'full' ? ',description,location' : ''}),nextPageToken,nextSyncToken`,
+              });
+              if (full) {
+                query.set('timeMin', windowStart);
+                query.set('timeMax', windowEnd);
+              } else query.set('syncToken', calendar.sync_token!);
+              if (next) query.set('pageToken', next);
+              const page = await get(
+                `calendars/${encodeURIComponent(calendar.google_id)}/events`,
+                query,
+                eventPage,
+              );
+              for (const raw of page.items) {
+                const normalized = await normalizeEvent(raw, calendar, zone);
+                // Incremental responses may contain changes outside the initial window.
+                if (
+                  !normalized ||
+                  (normalized.endDate ?? normalized.date) < windowStart.slice(0, 10) ||
+                  normalized.date > windowEnd.slice(0, 10)
+                )
+                  removed.push(await eventId(calendar.source_id, raw.id));
+                else imported.push(normalized);
+              }
+              next = page.nextPageToken;
+              syncToken = page.nextSyncToken;
+              if (next && (seen.has(next) || seen.size >= 39))
+                throw new ApiError(
+                  502,
+                  'Google sync exceeded its page limit. Previous data is unchanged.',
+                  'google_pagination',
+                );
+              if (next) seen.add(next);
+            } while (next);
+            if (!syncToken)
               throw new ApiError(
                 502,
-                'Google sync exceeded its page limit. Previous data is unchanged.',
-                'google_pagination',
+                'Google omitted the next sync token. Previous data is unchanged.',
+                'google_sync_token',
               );
-            if (next) seen.add(next);
-          } while (next);
-          if (!syncToken)
-            throw new ApiError(
-              502,
-              'Google omitted the next sync token. Previous data is unchanged.',
-              'google_sync_token',
-            );
-          break;
-        } catch (error) {
-          if (!(error instanceof Gone) || full || pass > 0)
-            throw error instanceof Gone
-              ? new ApiError(
-                  502,
-                  'Google could not restart synchronization. Retry later.',
-                  'google_sync_token',
-                )
-              : error;
-          full = true;
-          windowStart = new Date(now.valueOf() - 30 * 86400000).toISOString();
-          windowEnd = new Date(now.valueOf() + 365 * 86400000).toISOString();
-          // Drop the invalid token but keep the last safe display until a complete replacement succeeds.
-          await commit(lease, [
-            env.DB.prepare(
-              'UPDATE google_calendars SET sync_token=NULL WHERE household_id=? AND source_id=?',
-            ).bind(HOUSEHOLD_ID, calendar.source_id),
-          ]);
+            break;
+          } catch (error) {
+            if (!(error instanceof Gone) || full || pass > 0)
+              throw error instanceof Gone
+                ? new ApiError(
+                    502,
+                    'Google could not restart synchronization. Retry later.',
+                    'google_sync_token',
+                  )
+                : error;
+            full = true;
+            windowStart = new Date(now.valueOf() - 30 * 86400000).toISOString();
+            windowEnd = new Date(now.valueOf() + 365 * 86400000).toISOString();
+            // Drop the invalid token but keep the last safe display until a complete replacement succeeds.
+            await commit(lease, [
+              env.DB.prepare(
+                'UPDATE google_calendars SET sync_token=NULL WHERE household_id=? AND source_id=?',
+              ).bind(HOUSEHOLD_ID, calendar.source_id),
+            ]);
+          }
         }
-      }
-      const statements: D1PreparedStatement[] = [];
-      if (full)
+        const statements: D1PreparedStatement[] = [];
+        if (full)
+          statements.push(
+            env.DB.prepare('DELETE FROM events WHERE household_id=? AND sourceId=?').bind(
+              HOUSEHOLD_ID,
+              calendar.source_id,
+            ),
+          );
+        statements.push(...putEvents(env.DB, imported));
+        if (removed.length)
+          statements.push(
+            env.DB.prepare(
+              'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
+            ).bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(removed)),
+          );
+        statements.push(...assignImportedEvents(env.DB, calendar.source_id, calendar.member_id));
         statements.push(
-          env.DB.prepare('DELETE FROM events WHERE household_id=? AND sourceId=?').bind(
+          env.DB.prepare(
+            'UPDATE google_calendars SET sync_token=?,window_start=?,window_end=?,sync_time_zone=?,last_synced_at=?,full_synced_at=?,projection_version=1,last_sync_error=NULL WHERE household_id=? AND source_id=?',
+          ).bind(
+            syncToken!,
+            windowStart,
+            windowEnd,
+            zone,
+            new Date().toISOString(),
+            full ? now.toISOString() : calendar.full_synced_at,
             HOUSEHOLD_ID,
             calendar.source_id,
           ),
         );
-      statements.push(...putEvents(env.DB, imported));
-      if (removed.length)
-        statements.push(
-          env.DB.prepare(
-            'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
-          ).bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(removed)),
+        await commit(lease, statements);
+        results.push({ sourceId: calendar.source_id, imported: imported.length, full });
+      } catch (error) {
+        await commit(
+          lease,
+          [
+            env.DB.prepare(
+              'UPDATE google_calendars SET last_sync_error=? WHERE household_id=? AND source_id=?',
+            ).bind(syncFailure(error), HOUSEHOLD_ID, calendar.source_id),
+          ],
+          false,
         );
-      statements.push(...assignImportedEvents(env.DB, calendar.source_id, calendar.member_id));
-      statements.push(
-        env.DB.prepare(
-          'UPDATE google_calendars SET sync_token=?,window_start=?,window_end=?,sync_time_zone=?,last_synced_at=?,full_synced_at=?,projection_version=1 WHERE household_id=? AND source_id=?',
-        ).bind(
-          syncToken!,
-          windowStart,
-          windowEnd,
-          zone,
-          now.toISOString(),
-          full ? now.toISOString() : calendar.full_synced_at,
-          HOUSEHOLD_ID,
-          calendar.source_id,
-        ),
-      );
-      await commit(lease, statements);
-      results.push({ sourceId: calendar.source_id, imported: imported.length, full });
+        if (!automatic) throw error;
+        // Per-calendar batches are atomic, so other enabled calendars can safely continue.
+      }
     }
     return results;
   });

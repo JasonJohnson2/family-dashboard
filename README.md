@@ -86,11 +86,12 @@ Phase 1 adds read-only OAuth, discovery, privacy-filtered imports and incrementa
 - **Scopes:** `https://www.googleapis.com/auth/calendar.calendarlist.readonly` and `https://www.googleapis.com/auth/calendar.events.readonly` only.
 - **Existing Worker secrets:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
 - **New Worker secrets:** `GOOGLE_TOKEN_ENCRYPTION_KEY` (32 random bytes encoded as standard base64) and a separate `GOOGLE_ADMIN_KEY` (random management credential, at least 32 characters). The guide gives generation/configuration commands. Never commit their values.
-- **Migrations:** `0002_google_calendar.sql` and `0003_google_calendar_members.sql`; use `pnpm db:migrate:local` locally. The deployment pipeline runs `pnpm db:migrate:remote` before publishing.
+- **Migrations:** `0002_google_calendar.sql`, `0003_google_calendar_members.sql`, and `0004_google_sync_status.sql`; use `pnpm db:migrate:local` locally. The deployment pipeline runs `pnpm db:migrate:remote` before publishing.
 - **Privacy:** `busy` hides title/details; `title` shows title/time; `full` adds supported notes/location. Existing projections are cleared immediately when privacy changes or a calendar is disabled.
 - **Member assignment:** the calendar settings API accepts an optional `memberId` from the existing household. It applies the member's normal color/identity to both existing and future imports. Omit it to keep the mapping or send `null` to clear it.
 - **Working locations:** Google working-location event types are excluded. The first successful sync after migration refreshes existing imports to remove old entries; ordinary events named "Home" are retained.
-- **Operation:** connect, discover, enable a selected calendar, then explicitly sync using the documented API workflow. No Google writes or background/webhook sync. Phase 2 will add the protected connection-management UI.
+- **Automatic sync:** cron checks every 15 minutes; opening/returning to the dashboard and its visible one-minute timer request catch-up when Google data is at least 10 minutes old. A durable 10-minute attempt cooldown and the existing lease prevent Google request storms. Household loading stays independent of Google. Failed calendars keep cached events and expose sanitized status at `GET /api/google/refresh`; other calendars continue.
+- **Operation:** connect, discover, and enable selected calendars using the documented protected API workflow; automatic sync keeps them current. Administrative `POST /api/google/sync` still forces a sync. No new Cloudflare secrets or manual cron setup are needed after pipeline deployment. No Google writes or webhooks. Phase 2 will add the protected connection-management UI.
 
 ## Editing calendar events
 

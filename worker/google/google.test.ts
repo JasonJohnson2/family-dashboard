@@ -7,6 +7,7 @@ import { calendars, commit, connection, withLease } from './storage';
 import { eventId, normalizeEvent, sourceId } from './normalize';
 import { readState } from '../database';
 import { eventsOn } from '../../src/lib/dates';
+import { STALE_MS } from './status';
 import type { GoogleEnv, StoredCalendar } from './types';
 
 // Test-only values, unrelated to any real Google credentials.
@@ -292,6 +293,303 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       env,
     );
   }
+  const automatic = () => call('refresh', 'POST', {}, { Authorization: '', Origin: ORIGIN });
+  const schedule = () => worker.scheduled({ cron: '*/15 * * * *' } as ScheduledController, env);
+  const advance = () => vi.setSystemTime(Date.now() + STALE_MS);
+  const eventRequests = () => requests.filter((r) => r.url.pathname.endsWith('/events'));
+
+  it('adds automatic-sync metadata without resetting existing connections, mappings or sync tokens', async () => {
+    await runtime.dispose();
+    runtime = createDatabase();
+    db = (await runtime.getD1Database('DB')) as unknown as D1Database;
+    env.DB = db;
+    await migrate(db, '0003_google_calendar_members.sql');
+    const source = await selected('title');
+    await members();
+    await settings(source, 'robin', 'title');
+    await db
+      .prepare(
+        "UPDATE google_calendars SET sync_token='existing-token',last_synced_at='2026-09-21T12:00:00.000Z'",
+      )
+      .run();
+    const before = {
+      connection: await connection(db),
+      calendar: (await calendars(db))[0],
+      state: await readState(db),
+    };
+    await applyMigration(db, '0004_google_sync_status.sql');
+    expect(await connection(db)).toEqual(before.connection);
+    expect((await calendars(db))[0]).toEqual({
+      ...before.calendar,
+      last_attempt_at: null,
+      last_sync_error: null,
+    });
+    expect(await readState(db)).toEqual(before.state);
+    requests = [];
+    await schedule();
+    expect(requests).toHaveLength(0);
+  });
+
+  it('scheduled and public refresh are no-ops without a connection or enabled calendars', async () => {
+    await schedule();
+    expect(await (await automatic()).json()).toMatchObject({
+      synced: 0,
+      status: { connected: false, needsAttention: false },
+    });
+    expect(requests).toHaveLength(0);
+    await connected();
+    await call('calendars');
+    requests = [];
+    await schedule();
+    expect(await (await automatic()).json()).toMatchObject({
+      synced: 0,
+      status: { connected: true, enabledCalendars: 0, stale: false },
+    });
+    expect(requests).toHaveLength(0);
+    env.GOOGLE_CLIENT_SECRET = undefined;
+    await schedule();
+    expect((await worker.fetch(new Request(`${ORIGIN}/api/household`), env)).status).toBe(200);
+  });
+
+  it('scheduled sync retains identity/privacy/filtering, then uses incremental sync and 410 recovery', async () => {
+    const source = await selected('title');
+    await members();
+    await settings(source, 'robin', 'title');
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({
+            items: [
+              rawEvent('real-home', 'Home'),
+              { id: 'work-location', eventType: 'workingLocation' },
+            ],
+            nextSyncToken: 'auto-one',
+          })
+        : normal(url, init);
+    requests = [];
+    await schedule();
+    expect(eventRequests()).toHaveLength(1);
+    expect((await readState(db)).events).toMatchObject([
+      { title: 'Home', memberIds: ['robin'], sourceId: source },
+    ]);
+    expect(JSON.stringify((await readState(db)).events)).not.toMatch(/Private|work-location/);
+    expect((await calendars(db))[0]).toMatchObject({
+      enabled: 1,
+      privacy_mode: 'title',
+      member_id: 'robin',
+      sync_token: 'auto-one',
+      last_sync_error: null,
+    });
+    requests = [];
+    await schedule();
+    await automatic();
+    expect(requests).toHaveLength(0);
+    advance();
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({ items: [rawEvent('real-home', 'Updated')], nextSyncToken: 'auto-two' })
+        : normal(url, init);
+    await schedule();
+    expect(eventRequests()[0].url.searchParams.get('syncToken')).toBe('auto-one');
+    expect((await readState(db)).events[0]).toMatchObject({
+      title: 'Updated',
+      memberIds: ['robin'],
+    });
+    advance();
+    requests = [];
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? url.searchParams.has('syncToken')
+          ? new Response(null, { status: 410 })
+          : Response.json({ items: [rawEvent('replacement')], nextSyncToken: 'recovered' })
+        : normal(url, init);
+    await schedule();
+    expect(eventRequests()).toHaveLength(2);
+    expect(eventRequests()[0].url.searchParams.get('syncToken')).toBe('auto-two');
+    expect(eventRequests()[1].url.searchParams.has('timeMin')).toBe(true);
+    expect((await readState(db)).events).toMatchObject([
+      { externalId: 'replacement', memberIds: ['robin'] },
+    ]);
+  });
+
+  it('public refresh syncs stale data only and never grants management capabilities or exposes secrets', async () => {
+    await selected();
+    requests = [];
+    const response = await automatic();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({
+      synced: 1,
+      status: {
+        connected: true,
+        stale: false,
+        lastSyncedAt: new Date().toISOString(),
+        needsAttention: false,
+      },
+    });
+    expect((await readState(db)).events[0].title).toBe('Busy');
+    requests = [];
+    vi.setSystemTime(Date.now() + STALE_MS - 1);
+    expect(await (await automatic()).json()).toMatchObject({ synced: 0 });
+    expect(requests).toHaveLength(0);
+    vi.setSystemTime(Date.now() + 1);
+    expect(await (await automatic()).json()).toMatchObject({ synced: 1 });
+    expect(eventRequests()[0].url.searchParams.get('syncToken')).toBe('sync-one');
+    const status = await (await call('refresh', 'GET', undefined, { Authorization: '' })).text();
+    for (const secret of [
+      ADMIN,
+      KEY,
+      REFRESH,
+      ACCESS,
+      'test-client-secret',
+      'primary@example.test',
+      'sync-one',
+    ])
+      expect(status).not.toContain(secret);
+    expect(await (await call('status')).json()).toMatchObject({ sync: JSON.parse(status) });
+    requests = [];
+    expect((await call('refresh', 'POST', {}, { Authorization: '' })).status).toBe(403);
+    expect((await call('refresh', 'POST', {}, { Origin: 'https://evil.test' })).status).toBe(403);
+    expect(
+      (await call('refresh', 'POST', {}, { Origin: ORIGIN, 'Sec-Fetch-Site': 'cross-site' }))
+        .status,
+    ).toBe(403);
+    for (const body of [
+      { force: true },
+      { sourceId: 'other' },
+      { enabled: true },
+      { memberId: 'alex' },
+    ])
+      expect((await call('refresh', 'POST', body, { Origin: ORIGIN })).status).toBe(400);
+    expect((await call('sync', 'POST', {}, { Authorization: '' })).status).toBe(401);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('simultaneous devices and cron safely skip the shared lease while household reads remain fast', async () => {
+    await selected();
+    let started!: () => void, release!: (response: Response) => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const paused = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const normal = google;
+    google = (url, init) => {
+      if (url.pathname.endsWith('/events')) {
+        started();
+        return paused;
+      }
+      return normal(url, init);
+    };
+    requests = [];
+    const pending = automatic();
+    await entered;
+    try {
+      expect(
+        await (await call('refresh', 'GET', undefined, { Authorization: '' })).json(),
+      ).toMatchObject({ syncing: true });
+      expect(await (await automatic()).json()).toMatchObject({ outcome: 'busy', synced: 0 });
+      await schedule();
+      expect((await call('sync', 'POST', {})).status).toBe(409);
+      expect((await worker.fetch(new Request(`${ORIGIN}/api/household`), env)).status).toBe(200);
+      expect(eventRequests()).toHaveLength(1);
+    } finally {
+      release(Response.json({ items: [rawEvent()], nextSyncToken: 'concurrent' }));
+    }
+    expect(await (await pending).json()).toMatchObject({ synced: 1 });
+    await automatic();
+    expect(eventRequests()).toHaveLength(1);
+  });
+
+  it.each(['unavailable', 'authorization', 'configuration'] as const)(
+    'retains cached events and throttles repeated automatic %s failures',
+    async (failure) => {
+      await selected();
+      const before = await synced();
+      advance();
+      const normal = google;
+      if (failure === 'configuration') env.GOOGLE_CLIENT_SECRET = undefined;
+      else
+        google = (url, init) =>
+          failure === 'authorization' || url.pathname.endsWith('/events')
+            ? new Response(`${ADMIN} ${KEY} ${REFRESH} ${ACCESS} private payload`, {
+                status: failure === 'authorization' ? 400 : 503,
+              })
+            : normal(url, init);
+      requests = [];
+      const result = await automatic();
+      const body = await result.text();
+      expect(JSON.parse(body)).toMatchObject({
+        synced: 0,
+        status: { needsAttention: true, lastFailure: failure, stale: true },
+      });
+      for (const secret of [ADMIN, KEY, REFRESH, ACCESS, 'private payload'])
+        expect(body).not.toContain(secret);
+      expect((await readState(db)).events).toEqual(before.events);
+      expect((await readState(db)).household.revision).toBe(before.household.revision);
+      const attempts = requests.length;
+      await automatic();
+      await schedule();
+      await automatic();
+      expect(requests).toHaveLength(attempts);
+      expect((await calendars(db))[0].last_attempt_at).toBe(new Date().toISOString());
+      advance();
+      await automatic();
+      expect(requests).toHaveLength(attempts * 2);
+      env.GOOGLE_CLIENT_SECRET = 'test-client-secret';
+      google = normal;
+      // Administrators can force a retry without waiting for the public cooldown.
+      await synced();
+      expect(await (await call('refresh', 'GET')).json()).toMatchObject({
+        needsAttention: false,
+        lastFailure: null,
+        stale: false,
+      });
+    },
+  );
+
+  it('a failed calendar does not prevent other enabled calendars syncing', async () => {
+    const first = await selected('full');
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('calendarList')
+        ? Response.json({
+            items: [
+              { id: 'primary@example.test', summary: 'A' },
+              { id: 'second', summary: 'B' },
+            ],
+          })
+        : normal(url, init);
+    await call('calendars');
+    const second = (await calendars(db)).find((c) => c.source_id !== first)!;
+    await settings(second.source_id, undefined, 'busy');
+    await synced();
+    const before = (await readState(db)).events.find((e) => e.sourceId === first);
+    advance();
+    requests = [];
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? url.pathname.includes('primary')
+          ? new Response('private failure', { status: 500 })
+          : Response.json({ items: [rawEvent('second-new')], nextSyncToken: 'second-new-token' })
+        : normal(url, init);
+    await schedule();
+    const state = await readState(db);
+    expect(state.events.find((e) => e.sourceId === first)).toEqual(before);
+    expect(state.events.find((e) => e.externalId === 'second-new')).toMatchObject({
+      title: 'Busy',
+      sourceId: second.source_id,
+    });
+    expect((await calendars(db)).find((c) => c.source_id === first)?.last_sync_error).toBe(
+      'unavailable',
+    );
+    expect((await calendars(db)).find((c) => c.source_id === second.source_id)?.sync_token).toBe(
+      'second-new-token',
+    );
+    expect(eventRequests()).toHaveLength(2);
+  });
+
   it('persists one member and assigns full, incremental and rediscovered imports', async () => {
     const source = await selected();
     await members();
@@ -443,6 +741,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     ]);
     const before = await connection(db);
     await applyMigration(db, '0003_google_calendar_members.sql');
+    await applyMigration(db, '0004_google_sync_status.sql');
     expect(await connection(db)).toEqual(before);
     expect((await calendars(db))[0]).toMatchObject({
       enabled: 1,

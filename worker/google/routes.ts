@@ -11,6 +11,8 @@ import {
   stateCookie,
 } from './oauth';
 import { connection } from './storage';
+import { automaticSync } from './automatic';
+import { syncStatus } from './status';
 import type { GoogleEnv } from './types';
 
 const json = (value: unknown, status = 200) =>
@@ -25,6 +27,25 @@ const json = (value: unknown, status = 200) =>
 export async function googleRoute(request: Request, env: GoogleEnv) {
   const path = new URL(request.url).pathname;
   try {
+    if (path === '/api/google/refresh') {
+      // Public capability is limited to checking status / refreshing already-enabled stale data.
+      // No source, force, configuration or credentials can be supplied by the browser.
+      if (request.method === 'GET') return json(await syncStatus(env.DB));
+      if (request.method !== 'POST') throw new ApiError(405, 'Use GET or POST for refresh.');
+      if (
+        request.headers.get('Origin') !== new URL(request.url).origin ||
+        request.headers.get('Sec-Fetch-Site') === 'cross-site'
+      )
+        throw new ApiError(403, 'Use the dashboard origin.', 'google_origin');
+      if (
+        !z
+          .object({})
+          .strict()
+          .safeParse(await readJson(request)).success
+      )
+        throw new ApiError(400, 'Send an empty JSON object to refresh.');
+      return json({ ...(await automaticSync(env)), status: await syncStatus(env.DB) });
+    }
     if (path === '/api/google/callback') {
       if (request.method !== 'GET') throw new ApiError(405, 'Use GET for the Google callback.');
       return await callback(request, env);
@@ -44,6 +65,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         accountId: stored?.account_id ?? null,
         email: stored?.account_email ?? null,
         scopes: stored?.scopes.split(' ') ?? [],
+        sync: await syncStatus(env.DB),
       });
     }
     if (path === '/api/google/connect' && request.method === 'GET')

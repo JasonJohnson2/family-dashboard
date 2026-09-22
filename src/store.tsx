@@ -11,20 +11,27 @@ import { dateKey } from './lib/dates';
 import { newId } from './lib/id';
 import { householdApi } from './data/api';
 import { HouseholdController } from './data/controller';
+import { GoogleRefreshController } from './data/googleRefresh';
 import type { Operation } from './data/contracts';
 import type { CalendarEvent, Chore, FamilyMember, MealPlan, SharedList } from './types';
 
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 function useHouseholdState() {
   const [controller] = useState(() => new HouseholdController(householdApi));
+  const [googleRefresh] = useState(
+    () => new GoogleRefreshController(controller.refreshAfterCurrent),
+  );
   const sync = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [today, setToday] = useState(() => dateKey(new Date()));
   const [notice, setNotice] = useState('');
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === 'visible') void controller.refresh();
+      if (document.visibilityState === 'visible') {
+        void controller.refresh();
+        void googleRefresh.refresh();
+      }
     };
-    void controller.refresh();
+    refresh();
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('focus', refresh);
     window.addEventListener('online', refresh);
@@ -42,7 +49,7 @@ function useHouseholdState() {
       window.removeEventListener('online', refresh);
       window.removeEventListener('beforeunload', beforeUnload);
     };
-  }, [controller]);
+  }, [controller, googleRefresh]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(''), 3500);

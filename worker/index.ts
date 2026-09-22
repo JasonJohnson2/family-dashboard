@@ -1,5 +1,6 @@
 import { readJson } from './http';
 import { googleRoute } from './google/routes';
+import { automaticSync } from './google/automatic';
 import { mutationSchema } from '../src/data/contracts';
 import {
   ApiError,
@@ -15,6 +16,10 @@ const json = (body: unknown, status = 200) =>
     headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
   });
 export default {
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const result = await automaticSync(env);
+    if (result.outcome === 'unavailable') console.warn('google_scheduled_sync_unavailable');
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);

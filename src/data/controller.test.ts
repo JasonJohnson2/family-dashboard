@@ -28,6 +28,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 describe('API-backed optimistic store', () => {
+  it('reloads after an older in-flight read when a provider import completes', async () => {
+    const oldRead = deferred<HouseholdState>();
+    const latest = initial();
+    latest.household.revision = 1;
+    const api: HouseholdApi = {
+      load: vi.fn().mockReturnValueOnce(oldRead.promise).mockResolvedValue(latest),
+      save: vi.fn(),
+    };
+    const store = new HouseholdController(api);
+    const loading = store.refresh();
+    const imported = store.refreshAfterCurrent();
+    oldRead.resolve(initial());
+    await Promise.all([loading, imported]);
+    expect(api.load).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().data?.household.revision).toBe(1);
+  });
   it('checks immediately, serializes rapid changes, and reconciles server revisions', async () => {
     let state = initial();
     const first = deferred<HouseholdState>();

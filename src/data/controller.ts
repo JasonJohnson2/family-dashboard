@@ -81,6 +81,11 @@ export class HouseholdController {
     })();
     return this.reading;
   };
+  // An import can finish while an older household read is still in flight.
+  refreshAfterCurrent = async (): Promise<void> => {
+    if (this.reading) await this.reading;
+    await this.refresh();
+  };
   mutate = (operations: Operation[]): Promise<void> => {
     if (!operations.length) return Promise.resolve();
     if (!this.base || this.failed)

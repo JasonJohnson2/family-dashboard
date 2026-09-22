@@ -27,6 +27,8 @@ export interface StoredCalendar {
   privacy_mode: PrivacyMode;
   member_id: string | null;
   projection_version: number;
+  last_attempt_at: string | null;
+  last_sync_error: 'authorization' | 'configuration' | 'unavailable' | null;
   sync_token: string | null;
   window_start: string | null;
   window_end: string | null;
