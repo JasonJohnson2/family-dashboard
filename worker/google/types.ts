@@ -25,6 +25,8 @@ export interface StoredCalendar {
   is_primary: number;
   enabled: number;
   privacy_mode: PrivacyMode;
+  member_id: string | null;
+  projection_version: number;
   sync_token: string | null;
   window_start: string | null;
   window_end: string | null;
@@ -35,6 +37,8 @@ export interface StoredCalendar {
 export interface GoogleEvent {
   id: string;
   status?: string;
+  eventType?: string;
+  workingLocationProperties?: { type?: string } | null;
   summary?: string;
   description?: string;
   location?: string;

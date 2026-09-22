@@ -31,7 +31,14 @@ export function localTime(instant: string, timeZone: string) {
   };
 }
 export async function normalizeEvent(raw: GoogleEvent, calendar: StoredCalendar, timeZone: string) {
-  if (raw.status === 'cancelled') return null;
+  // Google working-location occurrences are status/location metadata, not household plans.
+  // Never infer this from a title such as "Home", which can also be a real event.
+  if (
+    raw.status === 'cancelled' ||
+    raw.eventType === 'workingLocation' ||
+    raw.workingLocationProperties != null
+  )
+    return null;
   const allDay = !!raw.start?.date;
   let date: string, endDate: string, startTime: string | undefined, endTime: string | undefined;
   if (allDay) {
@@ -67,7 +74,7 @@ export async function normalizeEvent(raw: GoogleEvent, calendar: StoredCalendar,
     timeZone,
     startInstant: allDay ? undefined : new Date(raw.start!.dateTime!).toISOString(),
     endInstant: allDay ? undefined : new Date(raw.end!.dateTime!).toISOString(),
-    memberIds: [],
+    memberIds: calendar.member_id ? [calendar.member_id] : [],
     recurrence: { frequency: 'none' },
     ...(calendar.privacy_mode === 'full'
       ? { location: raw.location?.trim().slice(0, 160), notes: raw.description?.slice(0, 2000) }

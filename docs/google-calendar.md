@@ -1,6 +1,6 @@
 # Google Calendar: Phase 1
 
-This is a server-side, read-only integration for one Google account in the existing household. No Google events are created, edited, or deleted. The existing React calendar displays normalized imports alongside local plans. Google imports cannot be edited through `/api/mutations`; local event editing continues unchanged. Polished connection management, member assignment, multiple Google accounts, scheduled synchronization, and push notifications are future work.
+This is a server-side, read-only integration for one Google account in the existing household. No Google events are created, edited, or deleted. The existing React calendar displays normalized imports alongside local plans. Google imports cannot be edited through `/api/mutations`; local event editing continues unchanged. Polished connection management, multiple Google accounts, scheduled synchronization, and push notifications are future work.
 
 ## Google Cloud configuration
 
@@ -57,6 +57,8 @@ Automatic Workers request logging is disabled in the checked-in configuration be
 
 Review `migrations/0002_google_calendar.sql`. It adds Google connection, calendar, OAuth-state, and operation-lease metadata, plus nullable `startInstant`/`endInstant` columns on existing events. It does not rewrite existing household data or change migration `0001`.
 
+Migration `0003_google_calendar_members.sql` adds a household-scoped, single-member mapping table and a projection-version marker. Existing credentials, calendar selections and privacy settings are retained. Existing calendars start unassigned; none is assigned to a person automatically. The migration invalidates sync tokens once so the next successful sync removes previously imported working-location entries, including unchanged recurring occurrences. A failed refresh retains the previous display and retries the full refresh next time. The marker also handles an older Worker finishing a sync during deployment. Subsequent syncs remain incremental.
+
 ```sh
 pnpm db:migrate:local
 # Production operator / deployment pipeline only:
@@ -69,19 +71,19 @@ The existing GitHub/Cloudflare pipeline deploy command applies pending migration
 
 All responses are `no-store`; the service worker bypasses `/api/`. Management requests require the admin bearer header, and browser requests must originate from `GOOGLE_APP_ORIGIN`. OAuth callbacks instead require a cryptographically random, 10-minute, single-use state record bound to an HttpOnly SameSite=Lax cookie. PKCE adds an authorization-code binding. The callback redirects only to the configured dashboard calendar.
 
-| Endpoint                      | Request                               | Result                                                                                          |
-| ----------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GET /api/google/connect`     | Admin header                          | `{ authorizationUrl }` plus OAuth state cookie; navigate to this Google URL in the same browser |
-| `GET /api/google/callback`    | Google code/state and matching cookie | Connects account, then redirects to `/#calendar`; sanitized JSON error on failure               |
-| `GET /api/google/status`      | Admin header                          | `{ configured, connected, accountId, email, scopes }`; no credentials                           |
-| `GET /api/google/calendars`   | Admin header                          | Discovers all readable calendars with pagination; returns `{ calendars }`                       |
-| `PATCH /api/google/calendars` | `{ sourceId, enabled, privacyMode }`  | Saves selection/privacy and returns `{ calendar }`                                              |
-| `POST /api/google/sync`       | `{}` or `{ sourceId }`                | Syncs enabled calendars, returning `{ synced: [{ sourceId, imported, full }] }`                 |
-| `POST /api/google/disconnect` | `{}`                                  | Removes local Google connection/imports and returns `{ connected: false }`                      |
+| Endpoint                      | Request                                         | Result                                                                                          |
+| ----------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /api/google/connect`     | Admin header                                    | `{ authorizationUrl }` plus OAuth state cookie; navigate to this Google URL in the same browser |
+| `GET /api/google/callback`    | Google code/state and matching cookie           | Connects account, then redirects to `/#calendar`; sanitized JSON error on failure               |
+| `GET /api/google/status`      | Admin header                                    | `{ configured, connected, accountId, email, scopes }`; no credentials                           |
+| `GET /api/google/calendars`   | Admin header                                    | Discovers all readable calendars with pagination; returns `{ calendars }`                       |
+| `PATCH /api/google/calendars` | `{ sourceId, enabled, privacyMode, memberId? }` | Saves selection/privacy/member and returns `{ calendar }`                                       |
+| `POST /api/google/sync`       | `{}` or `{ sourceId }`                          | Syncs enabled calendars, returning `{ synced: [{ sourceId, imported, full }] }`                 |
+| `POST /api/google/disconnect` | `{}`                                            | Removes local Google connection/imports and returns `{ connected: false }`                      |
 
-Calendar entries contain `googleId`, `sourceId`, `name`, `color`, `primary`, `enabled`, `privacyMode`, and `lastSyncedAt`. Sync tokens, ciphertext, IVs, access tokens and refresh tokens are never in API responses. JSON bodies have the existing 64 KiB bound. Unknown settings and supplied event payloads are rejected.
+Calendar entries contain `googleId`, `sourceId`, `name`, `color`, `primary`, `enabled`, `privacyMode`, `memberId` (or `null`), and `lastSyncedAt`. Sync tokens, ciphertext, IVs, access tokens and refresh tokens are never in API responses. JSON bodies have the existing 64 KiB bound. Unknown settings and supplied event payloads are rejected.
 
-Newly discovered calendars are disabled and use `busy`. Rediscovery preserves choices and removes imports for calendars no longer accessible. It never enables all calendars. Select an individual calendar and trigger sync deliberately. Source IDs are derived from the connection and calendar identity; a future member/source mapping can use them without hardcoding a person. No members are automatically assigned.
+Newly discovered calendars are disabled and use `busy`. Rediscovery preserves choices and removes imports for calendars no longer accessible. It never enables all calendars. Select an individual calendar and trigger sync deliberately. Source IDs are derived from the connection and calendar identity. Each calendar may be mapped to one existing household member using `memberId`. Omit `memberId` to preserve an existing mapping (backward-compatible with earlier clients); send `null` to clear it. Assignment changes immediately update existing imported events without contacting Google or resetting the sync token. New and updated imports use the same member through the existing `event_members` table, so normal member colors, avatars and filters apply even in busy mode. Disabled calendars retain their mapping for re-enabling. Unassigned calendars keep the existing Everyone behavior. Clear or reassign a calendar mapping before deleting its member; household-scoped foreign keys prevent dangling or cross-household assignments.
 
 The existing household read endpoint is still publicly accessible unless the deployment has external access control. Any imported projection is visible to people who can open the dashboard. The admin key protects integration management, **not** household viewing. Choose privacy settings with that access model in mind.
 
@@ -134,7 +136,10 @@ async function google(path, method = 'GET', body) {
 console.table((await google('calendars')).calendars);
 // Choose a sourceId from the table; do not enable calendars indiscriminately.
 const sourceId = prompt('Source ID of the calendar to import');
-await google('calendars', 'PATCH', { sourceId, enabled: true, privacyMode: 'busy' });
+const household = await (await fetch('/api/household')).json();
+console.table(household.family.map(({ id, name }) => ({ id, name })));
+const memberId = prompt('Member ID to assign (leave blank for Everyone)') || null;
+await google('calendars', 'PATCH', { sourceId, enabled: true, privacyMode: 'busy', memberId });
 await google('sync', 'POST', { sourceId });
 ```
 
@@ -142,6 +147,7 @@ Use **Refresh household** to display imports. Status is `await google('status')`
 
 ## Sync and privacy decisions
 
+- Google working-location entries are excluded using `eventType === "workingLocation"` or the presence of `workingLocationProperties`, never by title. The API requests only the working-location type, not office addresses or other details. Ordinary events titled "Home" remain eligible. Incremental sync still requests all event types so an excluded occurrence can delete its old dashboard projection. Full refreshes replace the source atomically; no Google event is changed.
 - Google expands recurrence with `singleEvents=true`. Each occurrence is a stable, deterministic provider-independent event (`externalId` is the Google event ID, recurrence is `none`). Local repeating events still use existing household recurrence logic.
 - Initial sync covers the preceding 30 days and following 365 days. Incremental requests reuse Google's `syncToken`, omit incompatible time bounds, and keep the other query parameters stable across pages. Changes outside the stored window are removed from the projection. A manual sync renews the window after 30 days or when the household timezone changes. There is no background scheduler in Phase 1.
 - Every page must succeed and the final page must supply `nextSyncToken` before event changes and that token are committed atomically. A 410 clears the invalid token and retries a full sync. Previously displayed safe data remains until a complete replacement succeeds, avoiding destructive partial resets.
@@ -156,7 +162,7 @@ Use **Refresh household** to display imports. Status is `await google('status')`
 
 ## Validation
 
-Google HTTP responses are mocked; automated tests require no Google credentials. Tests exercise real local D1 and include OAuth state/cookies/replay, encryption/tampering, discovery, paginated full/incremental sync, deletion and 410 recovery, failed-page rollback, token refresh, privacy changes, protected mutations, disconnect, and lease fencing.
+Google HTTP responses are mocked; automated tests require no Google credentials. Tests exercise real local D1 and include OAuth state/cookies/replay, encryption/tampering, discovery, paginated full/incremental sync, deletion and 410 recovery, failed-page rollback, token refresh, privacy changes, protected mutations, disconnect, lease fencing, member mapping/reassignment, working-location filtering, and upgrading existing Google connections. Browser tests verify imported-event member color/filter/identity and read-only details.
 
 ```sh
 pnpm format:check

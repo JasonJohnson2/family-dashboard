@@ -9,10 +9,32 @@ export const connection = (db: D1Database) =>
 export const calendars = async (db: D1Database) =>
   (
     await db
-      .prepare('SELECT * FROM google_calendars WHERE household_id=? ORDER BY name,google_id')
+      .prepare(
+        'SELECT c.*,m.member_id FROM google_calendars c LEFT JOIN google_calendar_members m ON m.household_id=c.household_id AND m.source_id=c.source_id WHERE c.household_id=? ORDER BY c.name,c.google_id',
+      )
       .bind(HOUSEHOLD_ID)
       .all<StoredCalendar>()
   ).results;
+// Rebuild assignments for the source, including unchanged events absent from incremental pages.
+// Only persisted events belonging to this source are touched, even if a provider ID collides.
+export function assignImportedEvents(db: D1Database, sourceId: string, memberId: string | null) {
+  return [
+    db
+      .prepare(
+        'DELETE FROM event_members WHERE household_id=? AND event_id IN (SELECT id FROM events WHERE household_id=? AND sourceId=?)',
+      )
+      .bind(HOUSEHOLD_ID, HOUSEHOLD_ID, sourceId),
+    ...(memberId
+      ? [
+          db
+            .prepare(
+              'INSERT INTO event_members (household_id,event_id,member_id) SELECT household_id,id,? FROM events WHERE household_id=? AND sourceId=?',
+            )
+            .bind(memberId, HOUSEHOLD_ID, sourceId),
+        ]
+      : []),
+  ];
+}
 // Delete mappings before sources to honor their FK, while retaining the exact owned source IDs.
 export async function disconnectStatements(db: D1Database) {
   const owned = (await calendars(db)).map((c) => c.source_id);

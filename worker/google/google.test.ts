@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDatabase, migrate } from '../../scripts/test-database';
+import { applyMigration, createDatabase, migrate } from '../../scripts/test-database';
 import worker from '../index';
 import { SCOPES } from './oauth';
 import { decryptToken, encryptToken } from './crypto';
 import { calendars, commit, connection, withLease } from './storage';
-import { eventId, normalizeEvent } from './normalize';
+import { eventId, normalizeEvent, sourceId } from './normalize';
 import { readState } from '../database';
 import { eventsOn } from '../../src/lib/dates';
 import type { GoogleEnv, StoredCalendar } from './types';
@@ -26,6 +26,27 @@ const rawEvent = (id = 'event-one', summary = 'Sensitive meeting') => ({
 
 describe('Google encryption and event normalization', () => {
   const calendar = { source_id: 'google_test', privacy_mode: 'busy' } as StoredCalendar;
+  it('excludes working-location semantics, not event titles, in every privacy mode', async () => {
+    for (const privacy_mode of ['busy', 'title', 'full'] as const) {
+      const mapped = { ...calendar, privacy_mode, member_id: 'chosen-member' };
+      for (const raw of [
+        { id: 'home-instance', eventType: 'workingLocation' },
+        { ...rawEvent(), eventType: 'workingLocation', summary: 'Office' },
+        { ...rawEvent(), workingLocationProperties: { type: 'homeOffice' } },
+        { ...rawEvent(), workingLocationProperties: { type: 'customLocation' } },
+      ])
+        expect(await normalizeEvent(raw, mapped, 'UTC')).toBeNull();
+      for (const eventType of [undefined, 'default', 'focusTime', 'outOfOffice']) {
+        const event = await normalizeEvent(
+          { ...rawEvent('ordinary-home', 'Home'), eventType },
+          mapped,
+          'UTC',
+        );
+        expect(event?.memberIds).toEqual(['chosen-member']);
+        expect(event?.title).toBe(privacy_mode === 'busy' ? 'Busy' : 'Home');
+      }
+    }
+  });
   it('authenticates encrypted refresh tokens, nonce and connection context', async () => {
     const encrypted = await encryptToken(REFRESH, KEY, 'connection');
     expect(encrypted.ciphertext).not.toContain(REFRESH);
@@ -233,6 +254,237 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     expect(response.status, await response.clone().text()).toBe(200);
     return readState(db);
   }
+  async function members() {
+    await db.batch(
+      ['alex', 'robin'].map((id) =>
+        db
+          .prepare(
+            'INSERT INTO members (household_id,id,name,initial,color,tint) VALUES (?,?,?,?,?,?)',
+          )
+          .bind('home', id, id, id[0].toUpperCase(), '#123456', '#eeeeee'),
+      ),
+    );
+  }
+  const settings = (
+    sourceId: string,
+    memberId?: string | null,
+    privacyMode = 'busy',
+    enabled = true,
+  ) =>
+    call('calendars', 'PATCH', {
+      sourceId,
+      enabled,
+      privacyMode,
+      ...(memberId === undefined ? {} : { memberId }),
+    });
+  async function deleteMember(id: string) {
+    const state = await readState(db);
+    return worker.fetch(
+      new Request(`${ORIGIN}/api/mutations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: crypto.randomUUID(),
+          revision: state.household.revision,
+          operations: [{ type: 'delete', entity: 'member', id }],
+        }),
+      }),
+      env,
+    );
+  }
+  it('persists one member and assigns full, incremental and rediscovered imports', async () => {
+    const source = await selected();
+    await members();
+    expect((await settings(source, 'robin')).status).toBe(200);
+    let state = await synced(source);
+    expect(state.events[0].memberIds).toEqual(['robin']);
+    const firstId = state.events[0].id;
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({ items: [rawEvent('second')], nextSyncToken: 'second-token' })
+        : normal(url, init);
+    state = await synced(source);
+    expect(state.events).toHaveLength(2);
+    expect(state.events.every((e) => e.memberIds.length === 1 && e.memberIds[0] === 'robin')).toBe(
+      true,
+    );
+    expect(state.events.some((e) => e.id === firstId)).toBe(true);
+    expect(await (await call('calendars')).json()).toMatchObject({
+      calendars: [{ sourceId: source, memberId: 'robin' }],
+    });
+    expect((await calendars(db))[0].member_id).toBe('robin');
+    expect((await settings(source)).status).toBe(200);
+    expect((await calendars(db))[0].member_id).toBe('robin');
+    // A privacy reset preserves the mapping, even though it deletes old projections.
+    expect((await settings(source, undefined, 'title')).status).toBe(200);
+    expect((await synced(source)).events.every((e) => e.memberIds[0] === 'robin')).toBe(true);
+  });
+  it('reassigns and clears existing projections immediately without Google calls or token resets', async () => {
+    const source = await selected();
+    await members();
+    await synced(source);
+    await db
+      .prepare(
+        "INSERT INTO events (household_id,id,sourceId,title,date,allDay,timeZone,recurrence) VALUES ('home','local-assigned','local','Local','2026-09-21',1,'UTC','{\"frequency\":\"none\"}')",
+      )
+      .run();
+    await db.prepare("INSERT INTO event_members VALUES ('home','local-assigned','alex')").run();
+    const before = (await readState(db)).household.revision;
+    requests = [];
+    for (const id of ['alex', 'robin', null]) {
+      expect((await settings(source, id)).status).toBe(200);
+      const state = await readState(db);
+      expect(state.events.find((e) => e.sourceId === source)?.memberIds).toEqual(id ? [id] : []);
+      expect(state.events.find((e) => e.id === 'local-assigned')?.memberIds).toEqual(['alex']);
+      expect((await calendars(db))[0].sync_token).toBe('sync-one');
+    }
+    expect(requests).toHaveLength(0);
+    expect((await readState(db)).household.revision).toBe(before + 3);
+  });
+  it('rejects missing/foreign members and protects mapped members even before events are synced', async () => {
+    const source = await selected();
+    await members();
+    await db
+      .prepare("INSERT INTO households (id,name,timeZone) VALUES ('other','Other','UTC')")
+      .run();
+    await db
+      .prepare("INSERT INTO members VALUES ('other','outsider','Outside','O','#123456','#eeeeee')")
+      .run();
+    for (const memberId of ['missing', 'outsider', 'bad/member'])
+      expect((await settings(source, memberId)).status).toBe(400);
+    expect((await calendars(db))[0].member_id).toBeNull();
+    expect((await settings(source, 'alex', 'busy', false)).status).toBe(200);
+    expect((await deleteMember('alex')).status).toBe(422);
+    expect((await readState(db)).family.some((m) => m.id === 'alex')).toBe(true);
+    expect((await settings(source, null, 'busy', false)).status).toBe(200);
+    expect((await deleteMember('alex')).status).toBe(200);
+  });
+  it('filters working-location occurrences during incremental sync and removes their old projections', async () => {
+    const source = await selected('full');
+    await members();
+    await settings(source, 'alex', 'full');
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({
+            items: [
+              rawEvent('ordinary-home', 'Home'),
+              rawEvent('old-location', 'Home'),
+              rawEvent('unchanged'),
+            ],
+            nextSyncToken: 'before-filter',
+          })
+        : normal(url, init);
+    await synced(source);
+    requests = [];
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({
+            items: [
+              { id: 'old-location', eventType: 'workingLocation' },
+              {
+                ...rawEvent('new-location', 'Office'),
+                workingLocationProperties: { type: 'officeLocation' },
+              },
+              rawEvent('new-plan'),
+            ],
+            nextSyncToken: 'after-filter',
+          })
+        : normal(url, init);
+    const state = await synced(source);
+    expect(state.events.map((e) => e.externalId).sort()).toEqual([
+      'new-plan',
+      'ordinary-home',
+      'unchanged',
+    ]);
+    expect(state.events.every((e) => e.memberIds[0] === 'alex')).toBe(true);
+    const query = requests.find((r) => r.url.pathname.endsWith('/events'))!.url.searchParams;
+    expect(query.get('syncToken')).toBe('before-filter');
+    expect(query.get('fields')).toContain('eventType,workingLocationProperties(type)');
+    // Keep exclusions in the response so we can delete their projections, rather than hiding them at Google.
+    expect(query.has('eventTypes')).toBe(false);
+    expect(
+      (
+        await db
+          .prepare('SELECT * FROM event_members WHERE event_id=?')
+          .bind(await eventId(source, 'old-location'))
+          .all()
+      ).results,
+    ).toHaveLength(0);
+  });
+  it('upgrades an existing connection and replaces unchanged working locations on the next successful sync', async () => {
+    await runtime.dispose();
+    runtime = createDatabase();
+    db = (await runtime.getD1Database('DB')) as unknown as D1Database;
+    env.DB = db;
+    await migrate(db, '0002_google_calendar.sql');
+    const encrypted = await encryptToken(REFRESH, KEY, 'legacy-connection');
+    const source = await sourceId('legacy-connection', 'primary@example.test');
+    await db.batch([
+      db
+        .prepare(
+          'INSERT INTO google_connections (household_id,id,refresh_ciphertext,refresh_iv,encryption_version,scopes) VALUES (?,?,?,?,?,?)',
+        )
+        .bind('home', 'legacy-connection', encrypted.ciphertext, encrypted.iv, 1, SCOPES.join(' ')),
+      db
+        .prepare("INSERT INTO calendar_sources VALUES ('home',?,'Work','google','#123456')")
+        .bind(source),
+      db
+        .prepare(
+          "INSERT INTO google_calendars (household_id,google_id,source_id,name,color,enabled,privacy_mode,sync_token,full_synced_at) VALUES ('home','primary@example.test',?,'Work','#123456',1,'full','legacy-token','2026-09-20T12:00:00Z')",
+        )
+        .bind(source),
+      db
+        .prepare(
+          "INSERT INTO events (household_id,id,sourceId,externalId,title,date,allDay,timeZone,recurrence) VALUES ('home',?,?,'old-home','Home','2026-09-21',1,'UTC','{\"frequency\":\"none\"}')",
+        )
+        .bind(await eventId(source, 'old-home'), source),
+    ]);
+    const before = await connection(db);
+    await applyMigration(db, '0003_google_calendar_members.sql');
+    expect(await connection(db)).toEqual(before);
+    expect((await calendars(db))[0]).toMatchObject({
+      enabled: 1,
+      privacy_mode: 'full',
+      member_id: null,
+      sync_token: null,
+      projection_version: 0,
+    });
+    // An older Worker may finish a sync between the migration and deployment; it cannot set the marker.
+    await db
+      .prepare(
+        "UPDATE google_calendars SET sync_token='old-worker-token',full_synced_at='2026-09-20T12:00:00Z',sync_time_zone='America/New_York'",
+      )
+      .run();
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('/events') ? new Response(null, { status: 500 }) : normal(url, init);
+    expect((await call('sync', 'POST', {})).status).toBe(502);
+    expect((await readState(db)).events[0].externalId).toBe('old-home');
+    requests = [];
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({
+            items: [
+              { id: 'old-home', eventType: 'workingLocation' },
+              rawEvent('real-home', 'Home'),
+            ],
+            nextSyncToken: 'new-token',
+          })
+        : normal(url, init);
+    expect((await synced(source)).events.map((e) => e.externalId)).toEqual(['real-home']);
+    expect((await calendars(db))[0].projection_version).toBe(1);
+    expect(
+      requests.find((r) => r.url.pathname.endsWith('/events'))!.url.searchParams.has('syncToken'),
+    ).toBe(false);
+    requests = [];
+    await synced(source);
+    expect(
+      requests.find((r) => r.url.pathname.endsWith('/events'))!.url.searchParams.get('syncToken'),
+    ).toBe('new-token');
+    expect(await connection(db)).toEqual(before);
+  });
   it('uses read-only scopes, PKCE, browser-bound single-use state and encrypted storage', async () => {
     const start = await begin();
     expect(start.url.origin).toBe('https://accounts.google.com');
@@ -569,6 +821,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
   });
   it('disconnect removes owned tokens, mappings and imports, keeping local records intact', async () => {
     const source = await selected();
+    await members();
+    expect((await settings(source, 'robin')).status).toBe(200);
     await synced(source);
     await db
       .prepare(
@@ -578,6 +832,9 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     expect((await call('disconnect', 'POST', {})).status).toBe(200);
     expect(await connection(db)).toBeNull();
     expect(await calendars(db)).toHaveLength(0);
+    expect((await db.prepare('SELECT * FROM google_calendar_members').all()).results).toHaveLength(
+      0,
+    );
     const state = await readState(db);
     expect(state.events.map((e) => e.id)).toEqual(['local-plan']);
     expect(state.sources.map((s) => s.id)).toEqual(['local']);

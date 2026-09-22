@@ -53,7 +53,10 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
     if (path === '/api/google/calendars' && request.method === 'PATCH') {
       const parsed = calendarSettings.safeParse(await readJson(request));
       if (!parsed.success)
-        throw new ApiError(400, 'Provide sourceId, enabled and privacyMode (busy, title or full).');
+        throw new ApiError(
+          400,
+          'Provide sourceId, enabled, privacyMode (busy, title or full), and an optional memberId (or null to clear it).',
+        );
       return json({ calendar: await configureCalendar(env, parsed.data) });
     }
     if (path === '/api/google/sync' && request.method === 'POST') {

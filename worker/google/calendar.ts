@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { idSchema } from '../../src/data/contracts';
 import { ApiError, HOUSEHOLD_ID } from '../database';
 import { accessToken } from './oauth';
-import { calendars, commit, connection, withLease } from './storage';
+import { assignImportedEvents, calendars, commit, connection, withLease } from './storage';
 import { eventId, normalizeEvent, sourceId } from './normalize';
 import type { GoogleEnv, StoredCalendar } from './types';
 import type { CalendarEvent } from '../../src/types';
@@ -22,6 +23,8 @@ const timeSchema = z.object({
 const googleEventSchema = z.object({
   id: z.string().min(1).max(500),
   status: z.string().optional(),
+  eventType: z.string().optional(),
+  workingLocationProperties: z.object({ type: z.string().optional() }).nullable().optional(),
   summary: z.string().optional(),
   description: z.string().optional(),
   location: z.string().optional(),
@@ -90,6 +93,7 @@ export function safeCalendar(c: StoredCalendar) {
     primary: !!c.is_primary,
     enabled: !!c.enabled,
     privacyMode: c.privacy_mode,
+    memberId: c.member_id ?? null,
     lastSyncedAt: c.last_synced_at,
   };
 }
@@ -172,6 +176,7 @@ export const calendarSettings = z
     sourceId: z.string().min(1).max(80),
     enabled: z.boolean(),
     privacyMode: z.enum(['busy', 'title', 'full']),
+    memberId: idSchema.nullable().optional(),
   })
   .strict();
 export async function configureCalendar(
@@ -181,25 +186,50 @@ export async function configureCalendar(
   return withLease(env.DB, async (lease) => {
     const c = (await calendars(env.DB)).find((c) => c.source_id === settings.sourceId);
     if (!c) throw new ApiError(404, 'Discover this Google calendar first.', 'google_calendar');
-    if (!!c.enabled === settings.enabled && c.privacy_mode === settings.privacyMode)
-      return safeCalendar(c);
-    await commit(lease, [
-      // Removing all old projections makes privacy changes immediate, even when Google is down.
-      env.DB.prepare('DELETE FROM events WHERE household_id=? AND sourceId=?').bind(
-        HOUSEHOLD_ID,
-        c.source_id,
-      ),
-      env.DB.prepare(
-        'UPDATE google_calendars SET enabled=?,privacy_mode=?,sync_token=NULL,last_synced_at=NULL,full_synced_at=NULL WHERE household_id=? AND source_id=?',
-      ).bind(Number(settings.enabled), settings.privacyMode, HOUSEHOLD_ID, c.source_id),
-      env.DB.prepare(
-        "UPDATE calendar_sources SET name=? WHERE household_id=? AND id=? AND provider='google'",
-      ).bind(
-        settings.privacyMode === 'busy' ? 'Google calendar' : c.name,
-        HOUSEHOLD_ID,
-        c.source_id,
-      ),
-    ]);
+    const memberId = settings.memberId === undefined ? c.member_id : settings.memberId;
+    if (
+      memberId &&
+      !(await env.DB.prepare('SELECT id FROM members WHERE household_id=? AND id=?')
+        .bind(HOUSEHOLD_ID, memberId)
+        .first())
+    )
+      throw new ApiError(400, 'Choose an existing household member.', 'google_member');
+    const projectionChanged =
+      !!c.enabled !== settings.enabled || c.privacy_mode !== settings.privacyMode;
+    const memberChanged = memberId !== c.member_id;
+    if (!projectionChanged && !memberChanged) return safeCalendar(c);
+    const statements: D1PreparedStatement[] = [];
+    if (projectionChanged)
+      statements.push(
+        // Removing all old projections makes privacy changes immediate, even when Google is down.
+        env.DB.prepare('DELETE FROM events WHERE household_id=? AND sourceId=?').bind(
+          HOUSEHOLD_ID,
+          c.source_id,
+        ),
+        env.DB.prepare(
+          'UPDATE google_calendars SET enabled=?,privacy_mode=?,sync_token=NULL,last_synced_at=NULL,full_synced_at=NULL WHERE household_id=? AND source_id=?',
+        ).bind(Number(settings.enabled), settings.privacyMode, HOUSEHOLD_ID, c.source_id),
+        env.DB.prepare(
+          "UPDATE calendar_sources SET name=? WHERE household_id=? AND id=? AND provider='google'",
+        ).bind(
+          settings.privacyMode === 'busy' ? 'Google calendar' : c.name,
+          HOUSEHOLD_ID,
+          c.source_id,
+        ),
+      );
+    if (memberChanged) {
+      statements.push(
+        memberId
+          ? env.DB.prepare(
+              'INSERT INTO google_calendar_members (household_id,source_id,member_id) VALUES (?,?,?) ON CONFLICT(household_id,source_id) DO UPDATE SET member_id=excluded.member_id',
+            ).bind(HOUSEHOLD_ID, c.source_id, memberId)
+          : env.DB.prepare(
+              'DELETE FROM google_calendar_members WHERE household_id=? AND source_id=?',
+            ).bind(HOUSEHOLD_ID, c.source_id),
+      );
+      statements.push(...assignImportedEvents(env.DB, c.source_id, memberId));
+    }
+    await commit(lease, statements);
     return safeCalendar((await calendars(env.DB)).find((c) => c.source_id === settings.sourceId)!);
   });
 }
@@ -256,6 +286,7 @@ export async function sync(env: GoogleEnv, requestedSource?: string) {
       const zone = household!.timeZone,
         now = new Date();
       let full =
+        calendar.projection_version !== 1 ||
         !calendar.sync_token ||
         !calendar.full_synced_at ||
         Date.now() - Date.parse(calendar.full_synced_at) > 30 * 86400000 ||
@@ -281,7 +312,7 @@ export async function sync(env: GoogleEnv, requestedSource?: string) {
               showDeleted: 'true',
               maxResults: '250',
               timeZone: zone,
-              fields: `items(id,status,start,end${calendar.privacy_mode !== 'busy' ? ',summary' : ''}${calendar.privacy_mode === 'full' ? ',description,location' : ''}),nextPageToken,nextSyncToken`,
+              fields: `items(id,status,eventType,workingLocationProperties(type),start,end${calendar.privacy_mode !== 'busy' ? ',summary' : ''}${calendar.privacy_mode === 'full' ? ',description,location' : ''}),nextPageToken,nextSyncToken`,
             });
             if (full) {
               query.set('timeMin', windowStart);
@@ -356,9 +387,10 @@ export async function sync(env: GoogleEnv, requestedSource?: string) {
             'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
           ).bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(removed)),
         );
+      statements.push(...assignImportedEvents(env.DB, calendar.source_id, calendar.member_id));
       statements.push(
         env.DB.prepare(
-          'UPDATE google_calendars SET sync_token=?,window_start=?,window_end=?,sync_time_zone=?,last_synced_at=?,full_synced_at=? WHERE household_id=? AND source_id=?',
+          'UPDATE google_calendars SET sync_token=?,window_start=?,window_end=?,sync_time_zone=?,last_synced_at=?,full_synced_at=?,projection_version=1 WHERE household_id=? AND source_id=?',
         ).bind(
           syncToken!,
           windowStart,

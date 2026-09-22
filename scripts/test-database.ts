@@ -13,18 +13,21 @@ export function createDatabase(persist: string | boolean = false) {
     }),
   );
 }
-export async function migrate(db: D1Database) {
+export async function applyMigration(db: D1Database, file: string) {
+  const sql = readFileSync(`migrations/${file}`, 'utf8').replace(/--[^\n]*/g, '');
+  await db.batch(
+    sql
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => db.prepare(s)),
+  );
+}
+export async function migrate(db: D1Database, through?: string) {
   for (const file of readdirSync('migrations')
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') && (!through || f <= through))
     .sort()) {
-    const sql = readFileSync(`migrations/${file}`, 'utf8').replace(/--[^\n]*/g, '');
-    await db.batch(
-      sql
-        .split(';')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => db.prepare(s)),
-    );
+    await applyMigration(db, file);
   }
 }
 export async function seed(db: D1Database, mode: 'starter' | 'demo' = 'demo') {
