@@ -15,22 +15,22 @@ export const calendars = async (db: D1Database) =>
       .bind(HOUSEHOLD_ID)
       .all<StoredCalendar>()
   ).results;
-// Rebuild assignments for the source, including unchanged events absent from incremental pages.
+// Only change assignments that differ; unchanged member rows are never rewritten.
 // Only persisted events belonging to this source are touched, even if a provider ID collides.
 export function assignImportedEvents(db: D1Database, sourceId: string, memberId: string | null) {
   return [
     db
       .prepare(
-        'DELETE FROM event_members WHERE household_id=? AND event_id IN (SELECT id FROM events WHERE household_id=? AND sourceId=?)',
+        'DELETE FROM event_members WHERE household_id=? AND member_id IS NOT ? AND event_id IN (SELECT id FROM events WHERE household_id=? AND sourceId=?)',
       )
-      .bind(HOUSEHOLD_ID, HOUSEHOLD_ID, sourceId),
+      .bind(HOUSEHOLD_ID, memberId, HOUSEHOLD_ID, sourceId),
     ...(memberId
       ? [
           db
             .prepare(
-              'INSERT INTO event_members (household_id,event_id,member_id) SELECT household_id,id,? FROM events WHERE household_id=? AND sourceId=?',
+              'INSERT INTO event_members (household_id,event_id,member_id) SELECT e.household_id,e.id,? FROM events e WHERE e.household_id=? AND e.sourceId=? AND NOT EXISTS (SELECT 1 FROM event_members m WHERE m.household_id=e.household_id AND m.event_id=e.id AND m.member_id=?)',
             )
-            .bind(memberId, HOUSEHOLD_ID, sourceId),
+            .bind(memberId, HOUSEHOLD_ID, sourceId, memberId),
         ]
       : []),
   ];

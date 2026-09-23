@@ -2,8 +2,9 @@ import { ApiError, HOUSEHOLD_ID } from '../database';
 import { calendars, connection } from './storage';
 import type { StoredCalendar } from './types';
 
-export const STALE_MS = 10 * 60_000;
-export const RETRY_MS = 10 * 60_000;
+export const STALE_MS = 60 * 60_000;
+export const RETRY_MS = 60 * 60_000;
+export const MANUAL_RETRY_MS = 60_000;
 export type SyncFailure = 'authorization' | 'configuration' | 'unavailable';
 
 // Persist only our own categories, never provider messages or exception text.
@@ -17,10 +18,11 @@ export function syncFailure(error: unknown): SyncFailure {
 export function isStale(calendar: StoredCalendar, now = Date.now()) {
   return !calendar.last_synced_at || now - Date.parse(calendar.last_synced_at) >= STALE_MS;
 }
-export function isDue(calendar: StoredCalendar, now = Date.now()) {
+export function isDue(calendar: StoredCalendar, manual = false, now = Date.now()) {
   return (
-    isStale(calendar, now) &&
-    (!calendar.last_attempt_at || now - Date.parse(calendar.last_attempt_at) >= RETRY_MS)
+    (manual || isStale(calendar, now)) &&
+    (!calendar.last_attempt_at ||
+      now - Date.parse(calendar.last_attempt_at) >= (manual ? MANUAL_RETRY_MS : RETRY_MS))
   );
 }
 export async function syncStatus(db: D1Database) {

@@ -269,20 +269,111 @@ function putEvents(db: D1Database, events: CalendarEvent[]) {
   }
   return statements;
 }
-export async function sync(env: GoogleEnv, requestedSource?: string, automatic = false) {
-  return withLease(env.DB, async (lease) => {
-    if (!(await connection(env.DB))) {
-      if (automatic) return [];
-      throw new ApiError(409, 'Connect Google first.', 'google_not_connected');
-    }
-    const selected = (await calendars(env.DB)).filter(
-      (c) =>
-        !!c.enabled &&
-        (!requestedSource || c.source_id === requestedSource) &&
-        (!automatic || isDue(c)),
+type SyncMode = 'admin' | 'stale' | 'manual';
+async function selectCalendars(env: GoogleEnv, mode: SyncMode, requestedSource?: string) {
+  if (!(await connection(env.DB))) {
+    if (mode !== 'admin') return [];
+    throw new ApiError(409, 'Connect Google first.', 'google_not_connected');
+  }
+  const enabled = (await calendars(env.DB)).filter(
+    (c) => !!c.enabled && (!requestedSource || c.source_id === requestedSource),
+  );
+  if (requestedSource && !enabled.length)
+    throw new ApiError(404, 'Enable this Google calendar before syncing.', 'google_calendar');
+  const selected = enabled.filter((c) => mode === 'admin' || isDue(c, mode === 'manual'));
+  if (mode === 'manual' && enabled.length && !selected.length)
+    throw new ApiError(
+      429,
+      'Calendars were just checked. Try again in a minute.',
+      'google_cooldown',
     );
-    if (requestedSource && !selected.length)
-      throw new ApiError(404, 'Enable this Google calendar before syncing.', 'google_calendar');
+  return selected;
+}
+
+// Read under the operation lease, then commit this delta and metadata together with fencing.
+// Local events are protected even when an imported provider ID collides with their IDs.
+async function projectionChanges(
+  db: D1Database,
+  calendar: StoredCalendar,
+  imported: CalendarEvent[],
+  removed: string[],
+  full: boolean,
+) {
+  const incoming = new Map(imported.map((event) => [event.id, event]));
+  const rows = (
+    await db
+      .prepare(
+        'SELECT * FROM events WHERE household_id=? AND (sourceId=? OR id IN (SELECT value FROM json_each(?)))',
+      )
+      .bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify([...incoming.keys()]))
+      .all<Record<string, unknown>>()
+  ).results;
+  const existing = new Map(rows.map((row) => [String(row.id), row]));
+  const excluded = new Set(removed);
+  const deleted = rows
+    .filter(
+      (row) =>
+        row.sourceId === calendar.source_id &&
+        (excluded.has(String(row.id)) || (full && !incoming.has(String(row.id)))),
+    )
+    .map((row) => String(row.id));
+  const deletedIds = new Set(deleted);
+  const changed = [...incoming.values()].filter((event) => {
+    if (excluded.has(event.id)) return false;
+    const prior = existing.get(event.id);
+    if (!prior) return true;
+    if (prior.sourceId !== calendar.source_id || prior.externalId !== event.externalId)
+      return false;
+    return eventColumns.some((column) => {
+      const value =
+        column === 'allDay'
+          ? Number(event.allDay)
+          : column === 'recurrence'
+            ? JSON.stringify(event.recurrence)
+            : (event[column as keyof CalendarEvent] ?? null);
+      return prior[column] !== value;
+    });
+  });
+  const kept = new Set(
+    rows
+      .filter((row) => row.sourceId === calendar.source_id && !deletedIds.has(String(row.id)))
+      .map((row) => String(row.id)),
+  );
+  changed.forEach((event) => kept.add(event.id));
+  const assignments = (
+    await db
+      .prepare(
+        'SELECT m.event_id,m.member_id FROM event_members m JOIN events e ON e.household_id=m.household_id AND e.id=m.event_id WHERE e.household_id=? AND e.sourceId=?',
+      )
+      .bind(HOUSEHOLD_ID, calendar.source_id)
+      .all<{ event_id: string; member_id: string }>()
+  ).results;
+  const correct = new Set(
+    assignments.filter((m) => m.member_id === calendar.member_id).map((m) => m.event_id),
+  );
+  const membersChanged =
+    assignments.some((m) => kept.has(m.event_id) && m.member_id !== calendar.member_id) ||
+    (!!calendar.member_id && [...kept].some((id) => !correct.has(id)));
+  const statements = putEvents(db, changed);
+  if (deleted.length)
+    statements.push(
+      db
+        .prepare(
+          'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
+        )
+        .bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(deleted)),
+    );
+  if (membersChanged)
+    statements.push(...assignImportedEvents(db, calendar.source_id, calendar.member_id));
+  return { statements, visibleChanged: !!(changed.length || deleted.length || membersChanged) };
+}
+
+export async function sync(env: GoogleEnv, requestedSource?: string, mode: SyncMode = 'admin') {
+  // Fresh/no-connection/no-enabled/cooldown checks do not even write a lease row.
+  if (mode !== 'admin' && !(await selectCalendars(env, mode, requestedSource)).length) return [];
+  return withLease(env.DB, async (lease) => {
+    // Repeat the decision after acquiring the lease to close the multi-device race.
+    const selected = await selectCalendars(env, mode, requestedSource);
     const get = googleClient(env),
       results: { sourceId: string; imported: number; full: boolean }[] = [];
     const household = await env.DB.prepare('SELECT timeZone FROM households WHERE id=?')
@@ -291,12 +382,13 @@ export async function sync(env: GoogleEnv, requestedSource?: string, automatic =
     for (const calendar of selected) {
       // Claim the retry interval while holding the shared lease, before any Google HTTP.
       // This durable timestamp also throttles retries if a Worker dies mid-request.
+      const attemptedAt = new Date().toISOString();
       await commit(
         lease,
         [
           env.DB.prepare(
-            'UPDATE google_calendars SET last_attempt_at=? WHERE household_id=? AND source_id=?',
-          ).bind(new Date().toISOString(), HOUSEHOLD_ID, calendar.source_id),
+            'UPDATE google_calendars SET last_attempt_at=? WHERE household_id=? AND source_id=? AND last_attempt_at IS NOT ?',
+          ).bind(attemptedAt, HOUSEHOLD_ID, calendar.source_id, attemptedAt),
         ],
         false,
       );
@@ -383,56 +475,54 @@ export async function sync(env: GoogleEnv, requestedSource?: string, automatic =
             windowStart = new Date(now.valueOf() - 30 * 86400000).toISOString();
             windowEnd = new Date(now.valueOf() + 365 * 86400000).toISOString();
             // Drop the invalid token but keep the last safe display until a complete replacement succeeds.
-            await commit(lease, [
-              env.DB.prepare(
-                'UPDATE google_calendars SET sync_token=NULL WHERE household_id=? AND source_id=?',
-              ).bind(HOUSEHOLD_ID, calendar.source_id),
-            ]);
+            await commit(
+              lease,
+              [
+                env.DB.prepare(
+                  'UPDATE google_calendars SET sync_token=NULL WHERE household_id=? AND source_id=? AND sync_token IS NOT NULL',
+                ).bind(HOUSEHOLD_ID, calendar.source_id),
+              ],
+              false,
+            );
           }
         }
-        const statements: D1PreparedStatement[] = [];
-        if (full)
-          statements.push(
-            env.DB.prepare('DELETE FROM events WHERE household_id=? AND sourceId=?').bind(
-              HOUSEHOLD_ID,
-              calendar.source_id,
-            ),
-          );
-        statements.push(...putEvents(env.DB, imported));
-        if (removed.length)
-          statements.push(
-            env.DB.prepare(
-              'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
-            ).bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(removed)),
-          );
-        statements.push(...assignImportedEvents(env.DB, calendar.source_id, calendar.member_id));
+        const { statements, visibleChanged } = await projectionChanges(
+          env.DB,
+          calendar,
+          imported,
+          removed,
+          full,
+        );
+        const metadata = {
+          sync_token: syncToken!,
+          window_start: windowStart,
+          window_end: windowEnd,
+          sync_time_zone: zone,
+          last_synced_at: new Date().toISOString(),
+          full_synced_at: full ? now.toISOString() : calendar.full_synced_at,
+          projection_version: 1,
+          last_sync_error: null,
+        };
+        const columns = Object.keys(metadata),
+          values = Object.values(metadata);
         statements.push(
           env.DB.prepare(
-            'UPDATE google_calendars SET sync_token=?,window_start=?,window_end=?,sync_time_zone=?,last_synced_at=?,full_synced_at=?,projection_version=1,last_sync_error=NULL WHERE household_id=? AND source_id=?',
-          ).bind(
-            syncToken!,
-            windowStart,
-            windowEnd,
-            zone,
-            new Date().toISOString(),
-            full ? now.toISOString() : calendar.full_synced_at,
-            HOUSEHOLD_ID,
-            calendar.source_id,
-          ),
+            `UPDATE google_calendars SET ${columns.map((column) => `${column}=?`).join(',')} WHERE household_id=? AND source_id=? AND (${columns.map((column) => `${column} IS NOT ?`).join(' OR ')})`,
+          ).bind(...values, HOUSEHOLD_ID, calendar.source_id, ...values),
         );
-        await commit(lease, statements);
+        await commit(lease, statements, visibleChanged);
         results.push({ sourceId: calendar.source_id, imported: imported.length, full });
       } catch (error) {
         await commit(
           lease,
           [
             env.DB.prepare(
-              'UPDATE google_calendars SET last_sync_error=? WHERE household_id=? AND source_id=?',
-            ).bind(syncFailure(error), HOUSEHOLD_ID, calendar.source_id),
+              'UPDATE google_calendars SET last_sync_error=? WHERE household_id=? AND source_id=? AND last_sync_error IS NOT ?',
+            ).bind(syncFailure(error), HOUSEHOLD_ID, calendar.source_id, syncFailure(error)),
           ],
           false,
         );
-        if (!automatic) throw error;
+        if (mode === 'admin') throw error;
         // Per-calendar batches are atomic, so other enabled calendars can safely continue.
       }
     }

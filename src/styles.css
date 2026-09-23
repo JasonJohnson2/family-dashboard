@@ -2885,3 +2885,21 @@ button:disabled {
 .event-detail > button + button {
   margin-top: 10px;
 }
+
+.calendar-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.calendar-sync .outline-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.calendar-sync [role='status'] {
+  color: var(--text-muted, #61717b);
+  font-size: 0.875rem;
+}

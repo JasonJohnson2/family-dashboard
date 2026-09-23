@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Repeat2 } from 'lucide-react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, Plus, Repeat2, RefreshCw } from 'lucide-react';
 import { useHousehold } from '../store';
 import { everyoneColor } from '../data/mock';
 import {
@@ -22,7 +22,22 @@ export function Calendar({
   open: (date: string) => void;
   viewEvent: (event: EventOccurrence) => void;
 }) {
-  const { today, events, family, sources } = useHousehold();
+  const { today, events, family, sources, googleRefresh } = useHousehold();
+  const googleSync = useSyncExternalStore(googleRefresh.subscribe, googleRefresh.getSnapshot);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void googleRefresh.refresh();
+    };
+    refresh();
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+    };
+  }, [googleRefresh]);
   const [view, setView] = useState<'day' | 'week' | 'month'>('week');
   const [date, setDate] = useState(today);
   const [member, setMember] = useState('all');
@@ -55,6 +70,17 @@ export function Calendar({
         </button>
       </div>
       <div className="calendar-panel card">
+        <div className="calendar-sync">
+          <button
+            className="outline-button"
+            disabled={googleSync.syncing}
+            onClick={() => void googleRefresh.refresh(true)}
+          >
+            <RefreshCw size={17} aria-hidden="true" />
+            {googleSync.syncing ? 'Syncing...' : 'Sync calendars'}
+          </button>
+          <span role="status">{googleSync.message}</span>
+        </div>
         <div className="calendar-toolbar">
           <div className="date-navigation">
             <button

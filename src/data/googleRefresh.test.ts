@@ -6,6 +6,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('manual refresh bypasses the browser stale-check throttle while deduplicating in-flight clicks', async () => {
+  let resolve!: (value: Response) => void;
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ synced: 0 }))
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+    );
+  vi.stubGlobal('fetch', fetch);
+  const refresh = new GoogleRefreshController(async () => {});
+  await refresh.refresh();
+  const pending = refresh.refresh(true);
+  expect(refresh.getSnapshot().syncing).toBe(true);
+  expect(refresh.refresh(true)).toBe(pending);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls[1][1].body).toBe('{"manual":true}');
+  resolve(Response.json({ outcome: 'cooldown', synced: 0 }));
+  await pending;
+  expect(refresh.getSnapshot()).toEqual({
+    syncing: false,
+    message: 'Calendars were just checked. Try again in a minute.',
+  });
+});
+
 it('deduplicates active checks and reloads household data after a successful Google import', async () => {
   vi.useFakeTimers();
   let resolve!: (value: Response) => void;

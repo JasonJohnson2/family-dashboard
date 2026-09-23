@@ -28,7 +28,6 @@ function useHouseholdState() {
     const refresh = () => {
       if (document.visibilityState === 'visible') {
         void controller.refresh();
-        void googleRefresh.refresh();
       }
     };
     refresh();
@@ -49,7 +48,7 @@ function useHouseholdState() {
       window.removeEventListener('online', refresh);
       window.removeEventListener('beforeunload', beforeUnload);
     };
-  }, [controller, googleRefresh]);
+  }, [controller]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(''), 3500);
@@ -148,6 +147,7 @@ function useHouseholdState() {
   };
   return {
     today,
+    googleRefresh,
     family: sync.data?.family ?? [],
     events: sync.data?.events ?? [],
     chores: sync.data?.chores ?? [],

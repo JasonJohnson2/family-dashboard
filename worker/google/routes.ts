@@ -29,7 +29,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
   try {
     if (path === '/api/google/refresh') {
       // Public capability is limited to checking status / refreshing already-enabled stale data.
-      // No source, force, configuration or credentials can be supplied by the browser.
+      // Only the manual flag may bypass staleness; its durable short cooldown still applies.
       if (request.method === 'GET') return json(await syncStatus(env.DB));
       if (request.method !== 'POST') throw new ApiError(405, 'Use GET or POST for refresh.');
       if (
@@ -37,14 +37,16 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         request.headers.get('Sec-Fetch-Site') === 'cross-site'
       )
         throw new ApiError(403, 'Use the dashboard origin.', 'google_origin');
-      if (
-        !z
-          .object({})
-          .strict()
-          .safeParse(await readJson(request)).success
-      )
-        throw new ApiError(400, 'Send an empty JSON object to refresh.');
-      return json({ ...(await automaticSync(env)), status: await syncStatus(env.DB) });
+      const parsed = z
+        .object({ manual: z.boolean().optional() })
+        .strict()
+        .safeParse(await readJson(request));
+      if (!parsed.success)
+        throw new ApiError(400, 'Send an empty object or a manual refresh flag.');
+      return json({
+        ...(await automaticSync(env, parsed.data.manual)),
+        status: await syncStatus(env.DB),
+      });
     }
     if (path === '/api/google/callback') {
       if (request.method !== 'GET') throw new ApiError(405, 'Use GET for the Google callback.');

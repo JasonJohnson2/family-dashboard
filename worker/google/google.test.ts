@@ -7,7 +7,8 @@ import { calendars, commit, connection, withLease } from './storage';
 import { eventId, normalizeEvent, sourceId } from './normalize';
 import { readState } from '../database';
 import { eventsOn } from '../../src/lib/dates';
-import { STALE_MS } from './status';
+import { STALE_MS, MANUAL_RETRY_MS } from './status';
+import { readFileSync } from 'node:fs';
 import type { GoogleEnv, StoredCalendar } from './types';
 
 // Test-only values, unrelated to any real Google credentials.
@@ -195,6 +196,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     );
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     await runtime.dispose();
@@ -294,9 +296,146 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     );
   }
   const automatic = () => call('refresh', 'POST', {}, { Authorization: '', Origin: ORIGIN });
-  const schedule = () => worker.scheduled({ cron: '*/15 * * * *' } as ScheduledController, env);
+  const manual = () =>
+    call('refresh', 'POST', { manual: true }, { Authorization: '', Origin: ORIGIN });
   const advance = () => vi.setSystemTime(Date.now() + STALE_MS);
   const eventRequests = () => requests.filter((r) => r.url.pathname.endsWith('/events'));
+
+  function trackWrites() {
+    let rows = 0;
+    const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+    const record = <T extends D1Result>(result: T) => {
+      rows += result.meta.rows_written;
+      return result;
+    };
+    function wrap(statement: D1PreparedStatement): D1PreparedStatement {
+      const wrapped = {
+        bind: (...values: unknown[]) => wrap(statement.bind(...values)),
+        run: async () => record(await statement.run()),
+        all: async () => record(await statement.all()),
+        first: (column?: string) => statement.first(column),
+        raw: (options?: { columnNames?: boolean }) => statement.raw(options),
+      } as D1PreparedStatement;
+      originals.set(wrapped, statement);
+      return wrapped;
+    }
+    // Miniflare's RPC database object cannot be monkeypatched; wrap its public interface instead.
+    env.DB = {
+      prepare: (sql: string) => wrap(db.prepare(sql)),
+      batch: async (statements: D1PreparedStatement[]) => {
+        const results = await db.batch(
+          statements.map((statement) => originals.get(statement) ?? statement),
+        );
+        results.forEach(record);
+        return results;
+      },
+    } as D1Database;
+    return () => rows;
+  }
+
+  it('removes the scheduled handler and explicitly clears deployed cron triggers', () => {
+    expect('scheduled' in worker).toBe(false);
+    expect(readFileSync('wrangler.jsonc', 'utf8')).toMatch(/"crons":\s*\[\s*\]/);
+  });
+
+  it('fresh, disabled and disconnected page checks perform zero D1 writes', async () => {
+    const written = trackWrites();
+    await automatic();
+    expect(written()).toBe(0);
+    await connected();
+    await call('calendars');
+    let before = written();
+    await automatic();
+    expect(written()).toBe(before);
+    const source = (await calendars(db))[0].source_id;
+    await settings(source, undefined, 'busy');
+    await synced();
+    requests = [];
+    before = written();
+    for (let i = 0; i < 5; i++) await automatic();
+    expect(written()).toBe(before);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('household manual sync bypasses one-hour freshness with a read-only short cooldown', async () => {
+    await selected();
+    await synced();
+    vi.setSystemTime(Date.now() + MANUAL_RETRY_MS);
+    requests = [];
+    const result = await manual();
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ synced: 1, status: { stale: false } });
+    expect(eventRequests()).toHaveLength(1);
+    const written = trackWrites();
+    for (let i = 0; i < 5; i++)
+      expect(await (await manual()).json()).toMatchObject({ outcome: 'cooldown', synced: 0 });
+    expect(written()).toBe(0);
+    expect(eventRequests()).toHaveLength(1);
+  });
+
+  it('no-change incremental and 410 full refresh leave 250 event/member rows and revision untouched', async () => {
+    const source = await selected('full');
+    await members();
+    await settings(source, 'robin', 'full');
+    const normal = google;
+    const items = Array.from({ length: 250 }, (_, i) => rawEvent(`large-${i}`));
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({ items, nextSyncToken: 'large' })
+        : normal(url, init);
+    await synced();
+    const before = await readState(db);
+    // Actual SQLite triggers fail the sync if even an unchanged row is rewritten.
+    for (const table of ['events', 'event_members'])
+      for (const operation of ['INSERT', 'UPDATE', 'DELETE'])
+        await db
+          .prepare(
+            `CREATE TRIGGER forbid_${table}_${operation} BEFORE ${operation} ON ${table} BEGIN SELECT RAISE(ABORT,'unchanged projection rewritten'); END`,
+          )
+          .run();
+    const written = trackWrites();
+    advance();
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({ items: [], nextSyncToken: 'empty' })
+        : normal(url, init);
+    expect(await (await automatic()).json()).toMatchObject({
+      synced: 1,
+      status: { needsAttention: false },
+    });
+    const incrementalWrites = written();
+    expect(incrementalWrites).toBeGreaterThan(0);
+    expect(incrementalWrites).toBeLessThanOrEqual(24);
+    expect(await readState(db)).toEqual(before);
+    advance();
+    // Identical events repeated by Google must also produce no projection writes.
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? Response.json({ items, nextSyncToken: 'identical' })
+        : normal(url, init);
+    expect(await (await automatic()).json()).toMatchObject({
+      synced: 1,
+      status: { needsAttention: false },
+    });
+    expect(await readState(db)).toEqual(before);
+    advance();
+    const writtenBeforeFull = written();
+    google = (url, init) =>
+      url.pathname.endsWith('/events')
+        ? url.searchParams.has('syncToken')
+          ? new Response(null, { status: 410 })
+          : Response.json({ items, nextSyncToken: 'full-again' })
+        : normal(url, init);
+    expect(await (await automatic()).json()).toMatchObject({
+      synced: 1,
+      status: { needsAttention: false },
+    });
+    expect(await readState(db)).toEqual(before);
+    expect(written() - writtenBeforeFull).toBeLessThanOrEqual(32);
+    console.log(
+      `D1 no-change sync: ${incrementalWrites} rows_written for 250 mapped events; 410 recovery: ${written() - writtenBeforeFull}`,
+    );
+  });
 
   it('adds automatic-sync metadata without resetting existing connections, mappings or sync tokens', async () => {
     await runtime.dispose();
@@ -326,12 +465,12 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     });
     expect(await readState(db)).toEqual(before.state);
     requests = [];
-    await schedule();
+    await automatic();
     expect(requests).toHaveLength(0);
   });
 
-  it('scheduled and public refresh are no-ops without a connection or enabled calendars', async () => {
-    await schedule();
+  it('public stale refresh are no-ops without a connection or enabled calendars', async () => {
+    await automatic();
     expect(await (await automatic()).json()).toMatchObject({
       synced: 0,
       status: { connected: false, needsAttention: false },
@@ -340,18 +479,18 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     await connected();
     await call('calendars');
     requests = [];
-    await schedule();
+    await automatic();
     expect(await (await automatic()).json()).toMatchObject({
       synced: 0,
       status: { connected: true, enabledCalendars: 0, stale: false },
     });
     expect(requests).toHaveLength(0);
     env.GOOGLE_CLIENT_SECRET = undefined;
-    await schedule();
+    await automatic();
     expect((await worker.fetch(new Request(`${ORIGIN}/api/household`), env)).status).toBe(200);
   });
 
-  it('scheduled sync retains identity/privacy/filtering, then uses incremental sync and 410 recovery', async () => {
+  it('stale sync retains identity/privacy/filtering, then uses incremental sync and 410 recovery', async () => {
     const source = await selected('title');
     await members();
     await settings(source, 'robin', 'title');
@@ -367,7 +506,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
           })
         : normal(url, init);
     requests = [];
-    await schedule();
+    await automatic();
     expect(eventRequests()).toHaveLength(1);
     expect((await readState(db)).events).toMatchObject([
       { title: 'Home', memberIds: ['robin'], sourceId: source },
@@ -381,7 +520,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       last_sync_error: null,
     });
     requests = [];
-    await schedule();
+    await automatic();
     await automatic();
     expect(requests).toHaveLength(0);
     advance();
@@ -389,7 +528,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       url.pathname.endsWith('/events')
         ? Response.json({ items: [rawEvent('real-home', 'Updated')], nextSyncToken: 'auto-two' })
         : normal(url, init);
-    await schedule();
+    await automatic();
     expect(eventRequests()[0].url.searchParams.get('syncToken')).toBe('auto-one');
     expect((await readState(db)).events[0]).toMatchObject({
       title: 'Updated',
@@ -403,7 +542,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
           ? new Response(null, { status: 410 })
           : Response.json({ items: [rawEvent('replacement')], nextSyncToken: 'recovered' })
         : normal(url, init);
-    await schedule();
+    await automatic();
     expect(eventRequests()).toHaveLength(2);
     expect(eventRequests()[0].url.searchParams.get('syncToken')).toBe('auto-two');
     expect(eventRequests()[1].url.searchParams.has('timeMin')).toBe(true);
@@ -465,7 +604,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     expect(requests).toHaveLength(0);
   });
 
-  it('simultaneous devices and cron safely skip the shared lease while household reads remain fast', async () => {
+  it('simultaneous devices and manual refresh safely skip the shared lease while household reads remain fast', async () => {
     await selected();
     let started!: () => void, release!: (response: Response) => void;
     const entered = new Promise<void>((resolve) => {
@@ -489,8 +628,9 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       expect(
         await (await call('refresh', 'GET', undefined, { Authorization: '' })).json(),
       ).toMatchObject({ syncing: true });
-      expect(await (await automatic()).json()).toMatchObject({ outcome: 'busy', synced: 0 });
-      await schedule();
+      expect(await (await automatic()).json()).toMatchObject({ synced: 0 });
+      await automatic();
+      expect(await (await manual()).json()).toMatchObject({ synced: 0 });
       expect((await call('sync', 'POST', {})).status).toBe(409);
       expect((await worker.fetch(new Request(`${ORIGIN}/api/household`), env)).status).toBe(200);
       expect(eventRequests()).toHaveLength(1);
@@ -530,7 +670,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       expect((await readState(db)).household.revision).toBe(before.household.revision);
       const attempts = requests.length;
       await automatic();
-      await schedule();
+      await automatic();
       await automatic();
       expect(requests).toHaveLength(attempts);
       expect((await calendars(db))[0].last_attempt_at).toBe(new Date().toISOString());
@@ -574,7 +714,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
           ? new Response('private failure', { status: 500 })
           : Response.json({ items: [rawEvent('second-new')], nextSyncToken: 'second-new-token' })
         : normal(url, init);
-    await schedule();
+    await automatic();
     const state = await readState(db);
     expect(state.events.find((e) => e.sourceId === first)).toEqual(before);
     expect(state.events.find((e) => e.externalId === 'second-new')).toMatchObject({

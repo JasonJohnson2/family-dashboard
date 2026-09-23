@@ -5,7 +5,7 @@
   "compatibility_date": "2026-09-19",
   // OAuth callbacks contain short-lived authorization codes; disable automatic request logging.
   "observability": { "enabled": false },
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": [] },
   "vars": { "GOOGLE_APP_ORIGIN": "https://family-dashboard.jjayson400.workers.dev" },
   "assets": {
     "directory": "./dist",
