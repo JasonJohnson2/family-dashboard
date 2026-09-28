@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode, type CSSProperties } from 'react';
-import { ArrowRight, Check, ChevronRight, Repeat2, X, type LucideIcon } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
+import { ArrowRight, Check, ChevronRight, Repeat2, Pencil, X, type LucideIcon } from 'lucide-react';
 import { useHousehold } from '../store';
 import { everyoneColor } from '../data/mock';
 import { formatTime } from '../lib/dates';
@@ -120,34 +120,102 @@ export function ChoreRow({
   chore,
   day,
   detail = false,
+  onEdit,
 }: {
   chore: Chore;
   day: string;
   detail?: boolean;
+  onEdit?: () => void;
 }) {
-  const { family, toggleChore } = useHousehold();
+  const { family, toggleChore, sync } = useHousehold();
+  const [confirm, setConfirm] = useState(false);
+  const [actor, setActor] = useState(chore.memberIds[0] ?? '');
+  const eligible = family.filter((m) => !chore.memberIds.length || chore.memberIds.includes(m.id));
   const member = family.find((p) => p.id === chore.memberIds[0]);
   const done = chore.completedDates.includes(day);
   return (
-    <label
-      className={`chore-row ${done ? 'completed' : ''}`}
-      style={colorStyle(member?.color ?? everyoneColor)}
-    >
-      <input type="checkbox" checked={done} onChange={() => toggleChore(chore.id, day)} />
-      <span className="check-visual">
-        <Check size={15} />
-      </span>
-      <span className="chore-title">
-        {chore.title}
-        {detail && (
-          <small>
-            {chore.recurrence.frequency === 'none' ? 'One-time' : chore.recurrence.frequency}{' '}
-            {chore.recurrence.frequency !== 'none' && <Repeat2 size={12} />}
-          </small>
-        )}
-      </span>
-      <span className="chore-person">{member?.name ?? 'Everyone'}</span>
-    </label>
+    <div className="chore-row-wrap">
+      <label
+        className={`chore-row ${done ? 'completed' : ''}`}
+        style={colorStyle(member?.color ?? everyoneColor)}
+      >
+        <input
+          type="checkbox"
+          checked={done}
+          disabled={!!sync.pending}
+          onChange={() => {
+            if (chore.stars && (done || eligible.length !== 1)) setConfirm(true);
+            else toggleChore(chore.id, day, eligible[0]?.id);
+          }}
+        />
+        <span className="check-visual">
+          <Check size={15} />
+        </span>
+        <span className="chore-title">
+          {chore.title}
+          {!!chore.stars && <small className="chore-stars">+{chore.stars} ★</small>}
+          {detail && (
+            <small>
+              {chore.recurrence.frequency === 'none' ? 'One-time' : chore.recurrence.frequency}{' '}
+              {chore.recurrence.frequency !== 'none' && <Repeat2 size={12} />}
+            </small>
+          )}
+        </span>
+        <span className="chore-person">{member?.name ?? 'Everyone'}</span>
+      </label>
+      {onEdit && (
+        <button
+          className="icon-button chore-edit"
+          aria-label={`Edit ${chore.title}`}
+          onClick={onEdit}
+        >
+          <Pencil size={16} />
+        </button>
+      )}
+      {confirm && (
+        <Modal
+          title={done ? 'Undo this chore?' : 'Who completed this chore?'}
+          onClose={() => setConfirm(false)}
+        >
+          <div className="reward-confirm">
+            <p>{chore.title}</p>
+            {done ? (
+              <p>
+                The original star award will be reversed. If those stars have been spent, an
+                operator must restore the balance first.
+              </p>
+            ) : (
+              <label>
+                Completed by
+                <select value={actor} onChange={(e) => setActor(e.target.value)}>
+                  <option value="">Choose a member</option>
+                  {eligible.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="form-actions">
+              <button className="outline-button" onClick={() => setConfirm(false)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={!done && !actor}
+                onClick={() => {
+                  toggleChore(chore.id, day, actor);
+                  setConfirm(false);
+                }}
+              >
+                {done ? 'Undo completion' : 'Complete and earn stars'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 export function Modal({

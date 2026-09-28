@@ -42,6 +42,7 @@ export interface EventOccurrence extends CalendarEvent {
   occurrenceId: string;
 }
 export interface Chore {
+  stars?: number;
   id: string;
   title: string;
   memberIds: MemberId[];
@@ -74,4 +75,4 @@ export interface SharedList {
   name: string;
   items: ListItem[];
 }
-export type Section = 'home' | 'calendar' | 'chores' | 'meals' | 'lists';
+export type Section = 'home' | 'calendar' | 'chores' | 'meals' | 'lists' | 'rewards';

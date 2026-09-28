@@ -1,3 +1,5 @@
+import { operatorRequired, validateRewards } from './rewards';
+import { requireRewardOperator, rewardOperatorRoute } from './reward-operator';
 import { readJson } from './http';
 import { googleRoute } from './google/routes';
 import { mutationSchema } from '../src/data/contracts';
@@ -22,7 +24,8 @@ export default {
     try {
       if (url.pathname === '/api/household' && request.method === 'GET')
         return json(await readState(env.DB));
-      if (url.pathname !== '/api/mutations') throw new ApiError(404, 'API endpoint not found.');
+      if (url.pathname !== '/api/mutations' && url.pathname !== '/api/rewards/operator')
+        throw new ApiError(404, 'API endpoint not found.');
       if (request.method !== 'POST') throw new ApiError(405, 'Use POST to save changes.');
       const origin = request.headers.get('Origin');
       if (
@@ -30,6 +33,7 @@ export default {
         request.headers.get('Sec-Fetch-Site') === 'cross-site'
       )
         throw new ApiError(403, 'Use the dashboard to make this change.');
+      if (url.pathname === '/api/rewards/operator') return await rewardOperatorRoute(request, env);
       const parsed = mutationSchema.safeParse(await readJson(request));
       if (!parsed.success)
         throw new ApiError(400, parsed.error.issues[0]?.message ?? 'Check your change.');
@@ -63,7 +67,10 @@ export default {
           'conflict',
         );
       validateReferences(before, mutation.operations);
-      const results = await env.DB.batch(mutationStatements(env.DB, mutation, fingerprint));
+      validateRewards(before, mutation.operations);
+      if (mutation.operations.some((op) => operatorRequired(before, op)))
+        await requireRewardOperator(request, env);
+      const results = await env.DB.batch(mutationStatements(env.DB, mutation, fingerprint, before));
       if (results.at(-1)?.meta.changes !== 1) {
         // A concurrent replay may have committed the same request while we were validating.
         const saved = await env.DB.prepare(

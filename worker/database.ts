@@ -1,3 +1,4 @@
+import { rewardStatements } from './rewards';
 import {
   stateSchema,
   type HouseholdState,
@@ -28,6 +29,11 @@ const tables = [
   'meals',
   'lists',
   'list_items',
+  'rewards',
+  'reward_members',
+  'reward_redemptions',
+  'star_transactions',
+  'chore_star_awards',
 ] as const;
 
 export async function readState(db: D1Database): Promise<HouseholdState> {
@@ -52,6 +58,11 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
     meals,
     lists,
     items,
+    rewards,
+    rewardMembers,
+    redemptions,
+    transactions,
+    awards,
   ] = results.map((r) => r.results);
   if (!households[0])
     throw new ApiError(
@@ -70,6 +81,16 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
   const assignments = (rows: Row[], column: string, id: unknown) =>
     rows.filter((row) => row[column] === id).map((row) => row.member_id);
   return stateSchema.parse({
+    rewards: rewards.map((row) => ({
+      ...clean(row),
+      active: !!row.active,
+      reusable: !!row.reusable,
+      requiresApproval: !!row.requiresApproval,
+      memberIds: assignments(rewardMembers, 'reward_id', row.id),
+    })),
+    redemptions: redemptions.map((row) => ({ ...clean(row), oneTime: !!row.oneTime })),
+    starTransactions: transactions.map(clean),
+    choreAwards: awards.map(clean),
     household: clean(households[0]),
     family: members.map(clean),
     sources: sources.map(clean),
@@ -112,7 +133,7 @@ const fields = {
     'notes',
     'recurrence',
   ],
-  chores: ['id', 'title', 'dueDate', 'recurrence'],
+  chores: ['id', 'title', 'dueDate', 'recurrence', 'stars'],
   meals: ['id', 'date', 'title', 'emoji', 'recipeId', 'notes'],
   lists: ['id', 'name'],
   list_items: ['id', 'list_id', 'text', 'completed', 'recipeId'],
@@ -132,6 +153,7 @@ export function mutationStatements(
   db: D1Database,
   mutation: Mutation,
   fingerprint: string,
+  before: HouseholdState,
 ): D1PreparedStatement[] {
   const params = [HOUSEHOLD_ID, mutation.id, mutation.revision + 1, mutation.revision];
   const gate = `EXISTS (SELECT 1 FROM mutation_receipts r JOIN households h ON h.id=r.household_id WHERE r.household_id=? AND r.id=? AND r.revision=? AND h.revision=?)`;
@@ -175,6 +197,7 @@ export function mutationStatements(
     );
   }
   for (const op of mutation.operations) {
+    rewardStatements(op, before, mutation.id, gate, write);
     switch (op.type) {
       case 'member.put':
         put('members', op.value);
@@ -184,7 +207,7 @@ export function mutationStatements(
         assign('event_members', 'event_id', op.value.id, op.value.memberIds);
         break;
       case 'chore.put':
-        put('chores', op.value);
+        put('chores', { ...op.value, stars: op.value.stars ?? 0 });
         assign('chore_members', 'chore_id', op.value.id, op.value.memberIds);
         break;
       case 'meal.put':

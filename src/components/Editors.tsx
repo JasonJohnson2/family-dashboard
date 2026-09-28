@@ -1,3 +1,5 @@
+import { RewardOperator } from './RewardOperator';
+import { operatorUnlocked } from '../data/operator';
 import { useRef, useState, type FormEvent } from 'react';
 import { Heart, MapPin, Repeat2, CalendarDays, Trash2, Pencil } from 'lucide-react';
 import { useHousehold } from '../store';
@@ -25,12 +27,14 @@ export function Editor({
   onClose,
   newList = false,
   eventId,
+  choreId,
 }: {
   kind: EditorKind;
   date?: string;
   onClose: () => void;
   newList?: boolean;
   eventId?: string;
+  choreId?: string;
 }) {
   const store = useHousehold();
   const {
@@ -49,17 +53,26 @@ export function Editor({
   const [existingEvent] = useState(() =>
     eventId ? store.events.find((event) => event.id === eventId) : undefined,
   );
+  const [existingChore] = useState(() => store.chores.find((c) => c.id === choreId));
+  const [stars, setStars] = useState(existingChore?.stars ?? 0);
+  const [, renderOperator] = useState(0);
   const lastAttempt = useRef<CalendarEvent | undefined>(undefined);
-  const [day, setDay] = useState(existingEvent?.date ?? date ?? today);
+  const [day, setDay] = useState(existingEvent?.date ?? existingChore?.dueDate ?? date ?? today);
   const [endDate, setEndDate] = useState(existingEvent?.endDate ?? '');
-  const [until, setUntil] = useState(existingEvent?.recurrence.until ?? '');
+  const [until, setUntil] = useState(
+    existingEvent?.recurrence.until ?? existingChore?.recurrence.until ?? '',
+  );
   const existingMeal = meals.find((m) => m.date === day);
   const [title, setTitle] = useState(
-    existingEvent?.title ?? (kind === 'meal' ? (existingMeal?.title ?? '') : ''),
+    existingEvent?.title ??
+      existingChore?.title ??
+      (kind === 'meal' ? (existingMeal?.title ?? '') : ''),
   );
-  const [memberIds, setMemberIds] = useState<string[]>(existingEvent?.memberIds ?? []);
+  const [memberIds, setMemberIds] = useState<string[]>(
+    existingEvent?.memberIds ?? existingChore?.memberIds ?? [],
+  );
   const [recurrence, setRecurrence] = useState<Recurrence>(
-    existingEvent?.recurrence.frequency ?? 'none',
+    existingEvent?.recurrence.frequency ?? existingChore?.recurrence.frequency ?? 'none',
   );
   const [start, setStart] = useState(existingEvent?.startTime ?? '09:00');
   const [end, setEnd] = useState(existingEvent?.endTime ?? '10:00');
@@ -72,11 +85,11 @@ export function Editor({
   const [listId, setListId] = useState(lists[0]?.id ?? '');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [id] = useState(() => eventId ?? newId());
+  const [id] = useState(() => eventId ?? choreId ?? newId());
   const [familyDraft, setFamilyDraft] = useState(family);
   const heading = {
     event: eventId ? 'Edit your plan' : 'Make a little plan',
-    chore: 'Share the little jobs',
+    chore: choreId ? 'Edit this chore' : 'Share the little jobs',
     meal: existingMeal ? 'On the menu' : 'Plan something delicious',
     list: newList ? 'A fresh list' : 'Add to a shared list',
     family: 'Our people',
@@ -168,7 +181,11 @@ export function Editor({
             title: title.trim(),
             memberIds,
             dueDate: day,
-            recurrence: { frequency: recurrence },
+            stars,
+            recurrence: {
+              frequency: recurrence,
+              until: recurrence === 'none' ? undefined : until || undefined,
+            },
             completedDates: [],
           },
         ]);
@@ -484,7 +501,7 @@ export function Editor({
                   </label>
                 </>
               )}
-              {kind === 'event' && eventId && recurrence !== 'none' && (
+              {((kind === 'event' && eventId) || kind === 'chore') && recurrence !== 'none' && (
                 <label>
                   Repeat until <span className="optional">(optional)</span>
                   <input
@@ -506,6 +523,25 @@ export function Editor({
                     placeholder="Anything to remember?"
                   />
                 </label>
+              )}
+              {kind === 'chore' && (
+                <div className="chore-star-editor">
+                  <label>
+                    Reward stars
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      step={1}
+                      required
+                      value={stars}
+                      disabled={!operatorUnlocked()}
+                      onChange={(e) => setStars(Number(e.target.value))}
+                    />
+                  </label>
+                  <small>Optional · 0 means no stars. An operator unlocks star values.</small>
+                  <RewardOperator onChange={() => renderOperator((n) => n + 1)} />
+                </div>
               )}
               {kind === 'meal' && (
                 <>
@@ -597,15 +633,17 @@ export function Editor({
             <button type="submit" className="primary" disabled={saving}>
               {saving
                 ? 'Saving…'
-                : kind === 'event' && eventId
-                  ? 'Save event'
-                  : kind === 'family'
-                    ? 'Save family'
-                    : kind === 'meal'
-                      ? 'Save meal'
-                      : kind === 'list' && newList
-                        ? 'Create list'
-                        : 'Add ' + (kind === 'list' ? 'item' : kind)}
+                : kind === 'chore' && choreId
+                  ? 'Save chore'
+                  : kind === 'event' && eventId
+                    ? 'Save event'
+                    : kind === 'family'
+                      ? 'Save family'
+                      : kind === 'meal'
+                        ? 'Save meal'
+                        : kind === 'list' && newList
+                          ? 'Create list'
+                          : 'Add ' + (kind === 'list' ? 'item' : kind)}
             </button>
           </div>
           <p className="demo-note">Changes are saved to your household</p>

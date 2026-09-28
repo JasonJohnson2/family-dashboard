@@ -154,3 +154,7 @@ Landscape tablets retain the sidebar and card grid; portrait tablets and phones 
 ## Assets
 
 Landscape photograph: [Unsplash source](https://images.unsplash.com/photo-1470770841072-f978cf4d019e), bundled locally; [Unsplash license](https://unsplash.com/license). DM Sans and Lora are bundled via Fontsource under their included SIL Open Font Licenses. Icons use Lucide (ISC). The app/home-screen icon is an original SVG included in this repository.
+
+## Rewards
+
+Rewards V1 adds individual Stars, paid chores, household rewards, approval requests and auditable activity. Configure the `REWARDS_OPERATOR_PIN` Worker secret (at least 8 characters) to enable operator controls. The new additive `0005_rewards.sql` migration runs through the existing deployment script; existing chores start at zero stars and no demo rewards are inserted. See [Rewards setup and architecture](docs/rewards.md) for PIN setup, ledger rules, undo behavior, approvals, concurrency, and validation.

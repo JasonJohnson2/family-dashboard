@@ -1,3 +1,4 @@
+import { Rewards } from './components/Rewards';
 import { useEffect, useState } from 'react';
 import {
   CalendarDays,
@@ -9,6 +10,8 @@ import {
   Users,
   Utensils,
   WifiOff,
+  Trophy,
+  Ellipsis,
 } from 'lucide-react';
 import { Home, type EditorKind } from './components/Home';
 import { Calendar } from './components/Calendar';
@@ -26,6 +29,7 @@ const navigation = [
   { id: 'chores', label: 'Chores', icon: CheckCheck },
   { id: 'meals', label: 'Meals', icon: Utensils },
   { id: 'lists', label: 'Lists', icon: ListChecks },
+  { id: 'rewards', label: 'Rewards', icon: Trophy },
 ] as const;
 function getSection(): Section {
   const section = location.hash.slice(1);
@@ -39,12 +43,15 @@ export default function App() {
     date?: string;
     newList?: boolean;
     eventId?: string;
+    choreId?: string;
   } | null>(null);
+  const [more, setMore] = useState(false);
   const [event, setEvent] = useState<EventOccurrence | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
     const onHash = () => {
       setSection(getSection());
+      setMore(false);
       window.scrollTo({ top: 0 });
     };
     const onNetwork = () => setOnline(navigator.onLine);
@@ -93,13 +100,19 @@ export default function App() {
             </strong>
             <span>Better days, together.</span>
           </a>
-          <nav aria-label="Main navigation">
+          <nav
+            aria-label="Main navigation"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setMore(false);
+            }}
+          >
             {navigation.map(({ id, label, icon: Icon }) => (
               <a
                 key={id}
                 href={`#${id}`}
                 aria-label={label}
-                className={section === id ? 'nav-item active' : 'nav-item'}
+                className={`nav-item ${section === id ? 'active' : ''} ${id === 'meals' || id === 'lists' ? 'nav-extra' : ''} ${more ? 'more-open' : ''}`}
+                onClick={() => setMore(false)}
                 aria-current={section === id ? 'page' : undefined}
               >
                 <Icon size={22} strokeWidth={section === id ? 2.3 : 1.7} />
@@ -107,6 +120,15 @@ export default function App() {
                 {section === id && <i />}
               </a>
             ))}
+            <button
+              className={`nav-item mobile-more ${more || section === 'meals' || section === 'lists' ? 'active' : ''}`}
+              aria-expanded={more}
+              aria-label="More navigation"
+              onClick={() => setMore(!more)}
+            >
+              <Ellipsis size={22} />
+              <span>More</span>
+            </button>
           </nav>
           <div className="sidebar-secondary">
             <button className="nav-item" onClick={() => open('family')}>
@@ -181,7 +203,13 @@ export default function App() {
                 {section === 'calendar' && (
                   <Calendar open={(date) => open('event', date)} viewEvent={setEvent} />
                 )}
-                {section === 'chores' && <Chores open={() => open('chore')} />}
+                {section === 'chores' && (
+                  <Chores
+                    open={() => open('chore')}
+                    edit={(choreId) => setEditor({ kind: 'chore', choreId })}
+                  />
+                )}
+                {section === 'rewards' && <Rewards />}
                 {section === 'meals' && <Meals open={(date) => open('meal', date)} />}
                 {section === 'lists' && (
                   <Lists open={() => setEditor({ kind: 'list', newList: true })} />
@@ -226,7 +254,7 @@ export default function App() {
       </div>
       {editor && (
         <Editor
-          key={`${editor.kind}-${editor.eventId ?? editor.date}`}
+          key={`${editor.kind}-${editor.eventId ?? editor.choreId ?? editor.date}`}
           {...editor}
           onClose={() => setEditor(null)}
         />

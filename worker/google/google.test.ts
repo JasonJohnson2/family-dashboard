@@ -451,10 +451,30 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
         "UPDATE google_calendars SET sync_token='existing-token',last_synced_at='2026-09-21T12:00:00.000Z'",
       )
       .run();
+    // Snapshot the legacy schema directly: the current household reader also
+    // expects Rewards tables, which intentionally do not exist at this point.
+    const snapshot = async () =>
+      (
+        await db.batch(
+          [
+            'households',
+            'members',
+            'calendar_sources',
+            'events',
+            'event_members',
+            'chores',
+            'chore_members',
+            'chore_completions',
+            'meals',
+            'lists',
+            'list_items',
+          ].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`)),
+        )
+      ).map((result) => result.results);
     const before = {
       connection: await connection(db),
       calendar: (await calendars(db))[0],
-      state: await readState(db),
+      state: await snapshot(),
     };
     await applyMigration(db, '0004_google_sync_status.sql');
     expect(await connection(db)).toEqual(before.connection);
@@ -463,7 +483,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       last_attempt_at: null,
       last_sync_error: null,
     });
-    expect(await readState(db)).toEqual(before.state);
+    expect(await snapshot()).toEqual(before.state);
+    await applyMigration(db, '0005_rewards.sql');
     requests = [];
     await automatic();
     expect(requests).toHaveLength(0);
@@ -882,6 +903,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     const before = await connection(db);
     await applyMigration(db, '0003_google_calendar_members.sql');
     await applyMigration(db, '0004_google_sync_status.sql');
+    await applyMigration(db, '0005_rewards.sql');
     expect(await connection(db)).toEqual(before);
     expect((await calendars(db))[0]).toMatchObject({
       enabled: 1,

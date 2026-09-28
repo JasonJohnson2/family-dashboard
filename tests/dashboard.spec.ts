@@ -8,11 +8,13 @@ test.afterEach(async ({ page }) => {
   if (!page.isClosed()) await expect(page.getByText('Saving�', { exact: true })).toHaveCount(0);
 });
 
-test('five sections fit the screen and navigation works', async ({ page }) => {
+test('six sections fit the screen and navigation works', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
-  for (const name of ['Home', 'Calendar', 'Chores', 'Meals', 'Lists']) {
+  for (const name of ['Home', 'Calendar', 'Chores', 'Meals', 'Lists', 'Rewards']) {
+    if ((name === 'Meals' || name === 'Lists') && (page.viewportSize()?.width ?? 0) < 600)
+      await page.getByRole('button', { name: 'More navigation' }).click();
     await page
       .getByRole('navigation', { name: 'Main navigation' })
       .getByRole('link', { name, exact: true })

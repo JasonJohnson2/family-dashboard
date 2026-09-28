@@ -114,10 +114,11 @@ function useHouseholdState() {
       /* The shared sync banner presents save failures. */
     });
   };
-  const toggleChore = (id: string, day: string) =>
+  const toggleChore = (id: string, day: string, memberId?: string) =>
     quick([
       {
         type: 'chore.complete',
+        memberId,
         id,
         date: day,
         completed: !data()
@@ -147,6 +148,10 @@ function useHouseholdState() {
   };
   return {
     today,
+    mutate: controller.mutate,
+    rewards: sync.data?.rewards ?? [],
+    redemptions: sync.data?.redemptions ?? [],
+    starTransactions: sync.data?.starTransactions ?? [],
     googleRefresh,
     family: sync.data?.family ?? [],
     events: sync.data?.events ?? [],

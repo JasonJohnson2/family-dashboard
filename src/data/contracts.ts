@@ -1,3 +1,10 @@
+import {
+  rewardSchema,
+  redemptionSchema,
+  transactionSchema,
+  awardSchema,
+  rewardOperations,
+} from './rewards';
 import { z } from 'zod';
 import type {
   CalendarEvent,
@@ -95,6 +102,7 @@ export const choreSchema: z.ZodType<Chore> = z
     dueDate: dateSchema,
     recurrence,
     completedDates: z.array(dateSchema).max(10000),
+    stars: z.number().int().min(0).max(1000).default(0),
   })
   .strict()
   .refine(
@@ -140,9 +148,16 @@ export const stateSchema = z.object({
   chores: z.array(choreSchema),
   meals: z.array(mealSchema),
   lists: z.array(listSchema),
+  rewards: z
+    .array(rewardSchema.extend({ createdAt: z.string(), updatedAt: z.string() }))
+    .default([]),
+  redemptions: z.array(redemptionSchema).default([]),
+  starTransactions: z.array(transactionSchema).default([]),
+  choreAwards: z.array(awardSchema).default([]),
 });
 export type HouseholdState = z.infer<typeof stateSchema>;
 export const operationSchema = z.discriminatedUnion('type', [
+  ...rewardOperations,
   z.object({ type: z.literal('member.put'), value: memberSchema }).strict(),
   z.object({ type: z.literal('event.put'), value: eventSchema }).strict(),
   z.object({ type: z.literal('chore.put'), value: choreSchema }).strict(),
@@ -165,6 +180,7 @@ export const operationSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('chore.complete'),
+      memberId: idSchema.optional(),
       id: idSchema,
       date: dateSchema,
       completed: z.boolean(),

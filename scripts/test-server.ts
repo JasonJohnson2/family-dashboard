@@ -49,7 +49,7 @@ const server = createServer(async (req, res) => {
           headers,
           ...(body ? { body } : {}),
         }),
-        { DB: db } as Env,
+        { DB: db, REWARDS_OPERATOR_PIN: 'test-only-48269173' } as Env,
       );
       active.add(pending);
       let response: Response;

@@ -5,7 +5,7 @@ import { addDays, daysFrom, formatDate, occursOn, weekStart } from '../lib/dates
 import { ChoreRow, Empty, MemberFilter } from './ui';
 import { QuickList } from './QuickList';
 
-export function Chores({ open }: { open: () => void }) {
+export function Chores({ open, edit }: { open: () => void; edit: (id: string) => void }) {
   const { today, chores } = useHousehold();
   const [day, setDay] = useState(today);
   const [member, setMember] = useState('all');
@@ -86,7 +86,7 @@ export function Chores({ open }: { open: () => void }) {
             ))}
           </div>
           {visible.map((chore) => (
-            <ChoreRow key={chore.id} chore={chore} day={day} detail />
+            <ChoreRow key={chore.id} chore={chore} day={day} detail onEdit={() => edit(chore.id)} />
           ))}
           {!visible.length && (
             <Empty>
@@ -100,7 +100,7 @@ export function Chores({ open }: { open: () => void }) {
               <h3>Still to do</h3>
               {overdue.map((c) => (
                 <div key={c.id}>
-                  <ChoreRow chore={c} day={c.dueDate} detail />
+                  <ChoreRow chore={c} day={c.dueDate} detail onEdit={() => edit(c.id)} />
                   <small>Due {formatDate(c.dueDate)}</small>
                 </div>
               ))}

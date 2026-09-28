@@ -1,3 +1,4 @@
+import { HomeRewards } from './Rewards';
 import {
   CalendarDays,
   CheckCheck,
@@ -94,6 +95,7 @@ export function Home({ navigate, open, viewEvent }: Props) {
           )}
         </Card>
       </div>
+      <HomeRewards />
       <div className="dashboard-columns">
         <div className="dashboard-column">
           <Card

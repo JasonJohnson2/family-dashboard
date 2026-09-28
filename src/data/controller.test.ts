@@ -6,6 +6,10 @@ import { applyOperations, type HouseholdState, type Mutation } from './contracts
 const initial = (): HouseholdState => ({
   household: { id: 'home', name: 'Home', timeZone: 'UTC', revision: 0 },
   family: [],
+  rewards: [],
+  redemptions: [],
+  starTransactions: [],
+  choreAwards: [],
   sources: [],
   events: [],
   chores: [],

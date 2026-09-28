@@ -1,3 +1,4 @@
+import { operatorHeaders } from './operator';
 import { stateSchema, type HouseholdState, type Mutation } from './contracts';
 
 export class SaveError extends Error {
@@ -37,7 +38,7 @@ export const householdApi: HouseholdApi = {
   save: (mutation) =>
     request('/api/mutations', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...operatorHeaders() },
       body: JSON.stringify(mutation),
     }),
 };
