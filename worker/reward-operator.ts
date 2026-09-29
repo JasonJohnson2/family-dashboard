@@ -1,3 +1,4 @@
+import { requireHousehold } from './household-auth';
 import { ApiError, HOUSEHOLD_ID } from './database';
 import { readJson } from './http';
 import { z } from 'zod';
@@ -13,6 +14,7 @@ const hash = async (value: string) =>
     (b) => b.toString(16).padStart(2, '0'),
   ).join('');
 export async function requireRewardOperator(request: Request, env: Env) {
+  const householdSession = await requireHousehold(request, env);
   const token = request.headers.get('X-Reward-Operator') ?? '';
   const pin = env.REWARDS_OPERATOR_PIN;
   if (!pin || pin.length < 8)
@@ -28,9 +30,9 @@ export async function requireRewardOperator(request: Request, env: Env) {
       'operator_required',
     );
   const session = await env.DB.prepare(
-    'SELECT expiresAt FROM reward_operator_sessions WHERE household_id=? AND tokenHash=?',
+    'SELECT expiresAt FROM reward_operator_sessions WHERE household_id=? AND tokenHash=? AND householdSessionId=?',
   )
-    .bind(HOUSEHOLD_ID, await hash(`${pin}:${token}`))
+    .bind(HOUSEHOLD_ID, await hash(`${pin}:${token}`), householdSession.id)
     .first<{ expiresAt: number }>();
   if (!session || session.expiresAt <= Date.now())
     throw new ApiError(
@@ -41,6 +43,7 @@ export async function requireRewardOperator(request: Request, env: Env) {
 }
 export async function rewardOperatorRoute(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') throw new ApiError(405, 'Use POST.');
+  const householdSession = await requireHousehold(request, env);
   const pin = env.REWARDS_OPERATOR_PIN;
   if (!pin || pin.length < 8)
     throw new ApiError(
@@ -82,10 +85,10 @@ export async function rewardOperatorRoute(request: Request, env: Env): Promise<R
   ).join('');
   const expiresAt = now + 15 * 60_000;
   await env.DB.prepare(
-    `INSERT INTO reward_operator_sessions (household_id,tokenHash,expiresAt) VALUES (?,?,?)
-    ON CONFLICT(household_id) DO UPDATE SET tokenHash=excluded.tokenHash,expiresAt=excluded.expiresAt`,
+    `INSERT INTO reward_operator_sessions (household_id,tokenHash,expiresAt,householdSessionId) VALUES (?,?,?,?)
+    ON CONFLICT(household_id) DO UPDATE SET tokenHash=excluded.tokenHash,expiresAt=excluded.expiresAt,householdSessionId=excluded.householdSessionId`,
   )
-    .bind(HOUSEHOLD_ID, await hash(`${pin}:${token}`), expiresAt)
+    .bind(HOUSEHOLD_ID, await hash(`${pin}:${token}`), expiresAt, householdSession.id)
     .run();
   return Response.json(
     { token, expiresAt },

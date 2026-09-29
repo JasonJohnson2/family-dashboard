@@ -3,7 +3,7 @@ import { applyMigration, createDatabase, migrate, seed } from '../scripts/test-d
 import type { HouseholdState, Mutation, Operation } from '../src/data/contracts';
 import { starBalance, type Reward } from '../src/data/rewards';
 import { readState } from './database';
-import worker from './index';
+import { authenticatedWorker as worker, testSession } from '../scripts/test-auth';
 
 describe('Rewards on real D1', () => {
   let runtime: ReturnType<typeof createDatabase>, db: D1Database, env: Env, token: string;
@@ -61,7 +61,10 @@ describe('Rewards on real D1', () => {
     runtime = createDatabase();
     db = (await runtime.getD1Database('DB')) as unknown as D1Database;
     await migrate(db);
+    await testSession(db);
     env = {
+      GOOGLE_APP_ORIGIN: 'https://home.test',
+      AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
       DB: db,
       ASSETS: { fetch: async () => new Response('shell') } as Fetcher,
       REWARDS_OPERATOR_PIN: pin,

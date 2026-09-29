@@ -1,6 +1,6 @@
 # Our Home · Family Dashboard
 
-A responsive family dashboard for landscape tablets, phones, and desktop browsers. React and TypeScript provide the existing five-section interface; a Cloudflare Worker serves the app and its API, and **Cloudflare D1 stores household data**.
+A responsive family dashboard for landscape tablets, phones, and desktop browsers. React and TypeScript provide the six-section interface; a Cloudflare Worker serves the app and its API, and **Cloudflare D1 stores household data**.
 
 ## Local setup
 
@@ -10,6 +10,7 @@ Use Node 24.18.0 (22.12+ supported) and pnpm 10.11.1. The repository is a single
 pnpm install --frozen-lockfile
 pnpm db:migrate:local
 pnpm db:seed:local
+pnpm auth:credential     # Follow docs/household-access.md to set local .dev.vars
 pnpm dev
 ```
 
@@ -66,7 +67,7 @@ For Git-connected Cloudflare Workers Builds:
 
 The build identity needs Workers deployment and D1 edit permissions for this account. Keep API tokens in Cloudflare's build secret settings or a local environment, never in source control. `.env*`, `.dev.vars*`, `.wrangler/`, and generated artifacts are ignored. No database password is sent to the browser; only the Worker has the DB binding. No scheduled jobs or paid-only features are required. Check current [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) as household usage grows.
 
-**Access model:** authentication is intentionally outside this phase. Anyone who can reach this deployment can read or change this one household. The same-origin write checks prevent casual cross-site form requests; they are not authentication or access control. Choose access control before storing sensitive family details on a publicly reachable deployment.
+**Access model:** this is now a private household application. The Worker requires a secure household session for private APIs. Trusted devices stay signed in for 180 days; normal browsers for 12 hours. The existing operator PIN separately protects privileged actions. **After deployment, follow the [one-time household credential setup](docs/household-access.md#one-time-production-setup)**; the site remains locked until configured. No credentials belong in GitHub or frontend variables.
 
 ## Persistence and synchronization
 
@@ -75,7 +76,7 @@ The build identity needs Workers deployment and D1 edit permissions for this acc
 - Every mutation carries a household revision and a unique request ID. Writes, assignment changes, completion changes, a retry receipt, and the revision increment commit atomically in a D1 batch. Prepared/bound SQL is used for all runtime values.
 - If another device saved first, a stale write receives a conflict instead of overwriting its changes. The app loads the latest state, reports the conflict, and asks the user to review/reapply their change. This uses a single household-wide revision, intentionally favoring simplicity over automatic field merging.
 - Failed optimistic changes revert to confirmed data. A visible error offers refresh or **Retry save**. Retrying an uncertain network failure uses the exact same request ID and payload, so a response lost after a successful commit does not duplicate data. Later queued changes are reverted with an explicit message to re-enter them. **Dismiss** abandons the pending retry; no offline write queue is stored across reloads.
-- Household data is never cached by the service worker. The installed app shell can open offline, but initial data loading and saves require a connection. An already-open page keeps its last confirmed state; failed saves remain visible. Reconnect/refetch to recover. Wait for “Household up to date” before closing the app; a pending-save unload guard helps prevent accidental navigation.
+- Household data is never cached by the service worker. The installed app shell can open offline, but initial data loading and saves require a connection. An offline restart shows a private reconnect screen until its session can be verified. Hidden pages are concealed on return until revalidation; logout/revocation clears in-memory private data. Reconnect/refetch to recover. Wait for “Household up to date” before closing the app; a pending-save unload guard helps prevent accidental navigation.
 - Existing prototype changes lived only in browser memory and cannot be recovered from a prior refresh. The new database starts deliberately; it does not import an old tab's demo state.
 
 ## Google Calendar integration
@@ -139,7 +140,7 @@ src/data/controller.ts      Save queue, revisions, retry/reconciliation
 src/store.tsx               React household state and resume/refetch lifecycle
 src/data/calendarProvider.ts Provider-independent calendar boundary
 src/data/mock.ts            Explicit seed/test fixtures only
-src/components/             Existing five-section UI and sync status
+src/components/             Six-section UI, household access, and sync status
 worker/index.ts             Same-origin JSON API and asset routing
 worker/database.ts          Prepared SQL, household scoping and atomic mutations
 migrations/                 Version-controlled schema changes

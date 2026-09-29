@@ -20,6 +20,21 @@ type Pending = {
 
 // One ordered write queue per browser. Revisions prevent stale devices overwriting each other.
 export class HouseholdController {
+  private disposed = false;
+  destroy = () => {
+    this.disposed = true;
+    this.epoch++;
+    this.base = undefined;
+    this.failed = undefined;
+    this.queue
+      .splice(0)
+      .forEach((pending) =>
+        pending.reject(
+          new Error('Household access ended. Re-enter unconfirmed changes after signing in.'),
+        ),
+      );
+    this.publish({ error: '', refreshing: false });
+  };
   private base?: HouseholdState;
   private snapshot: SyncSnapshot = {
     pending: 0,
@@ -58,7 +73,7 @@ export class HouseholdController {
     this.listeners.forEach((listener) => listener());
   }
   refresh = (): Promise<void> => {
-    if (this.queue.length) return Promise.resolve();
+    if (this.disposed || this.queue.length) return Promise.resolve();
     if (this.reading) return this.reading;
     const epoch = this.epoch;
     this.publish({ refreshing: true });
@@ -88,7 +103,7 @@ export class HouseholdController {
   };
   mutate = (operations: Operation[]): Promise<void> => {
     if (!operations.length) return Promise.resolve();
-    if (!this.base || this.failed)
+    if (this.disposed || !this.base || this.failed)
       return Promise.reject(
         new SaveError(
           'Resolve the pending save using Retry save or Dismiss before making another change.',
@@ -123,13 +138,16 @@ export class HouseholdController {
           operations: pending.operations,
         };
         try {
-          this.base = await this.api.save(request);
+          const saved = await this.api.save(request);
+          if (this.disposed) return;
+          this.base = saved;
           this.queue.shift();
           this.failed = undefined;
           this.writeError = false;
           this.publish({ error: '', lastSaved: Date.now() });
           pending.resolve();
         } catch (error) {
+          if (this.disposed) return;
           const failure =
             error instanceof Error ? error : new Error('Your change could not be saved.');
           this.failed = error instanceof SaveError && error.retryable ? request : undefined;
@@ -138,7 +156,8 @@ export class HouseholdController {
           const message = `${failure.message}${cancelled.length > 1 ? ' Later changes were also reverted; please enter them again.' : ''}`;
           this.publish({ error: message });
           try {
-            this.base = await this.api.load();
+            const latest = await this.api.load();
+            if (!this.disposed) this.base = latest;
           } catch {
             /* Keep the last confirmed snapshot and the visible save error. */
           }

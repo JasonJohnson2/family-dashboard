@@ -1,8 +1,10 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { loginHousehold } from './access-fixture';
+import { test, expect, type APIRequestContext } from './fixtures';
 
 test.use({ serviceWorkers: 'block' });
 test.beforeEach(async ({ request }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
 });
 async function household(request: APIRequestContext) {
   return await (await request.get('/api/household')).json();

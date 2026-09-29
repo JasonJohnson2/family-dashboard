@@ -1,8 +1,10 @@
-import { test, expect } from '@playwright/test';
+import { loginHousehold } from './access-fixture';
+import { test, expect } from './fixtures';
 
 test.beforeEach(async ({ request }) => {
   const response = await request.post('/__test/reset');
   expect(response.ok()).toBe(true);
+  await loginHousehold(request);
 });
 test.afterEach(async ({ page }) => {
   if (!page.isClosed()) await expect(page.getByText('Saving�', { exact: true })).toHaveCount(0);
@@ -150,8 +152,10 @@ test('production shell reloads offline', async ({ page, context, browserName }) 
   await expect(page.getByRole('textbox', { name: 'New list item' })).toHaveValue('');
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Lists', exact: true })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('Could not reach');
+  // The offline shell must now conceal private data until the session is verified.
+  await expect(page.getByRole('heading', { name: 'Welcome home', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Reconnect to verify');
+  await expect(page.getByRole('checkbox', { name: 'Temporary offline item' })).toHaveCount(0);
   await context.setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect(page.getByRole('checkbox', { name: 'Temporary offline item' })).toBeVisible();

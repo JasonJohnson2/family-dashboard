@@ -1,3 +1,4 @@
+import { HouseholdAccess } from './components/HouseholdAccess';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
@@ -7,9 +8,11 @@ import './styles.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <HouseholdProvider>
-      <App />
-      <AppUpdate />
-    </HouseholdProvider>
+    <HouseholdAccess>
+      <HouseholdProvider>
+        <App />
+        <AppUpdate />
+      </HouseholdProvider>
+    </HouseholdAccess>
   </React.StrictMode>,
 );

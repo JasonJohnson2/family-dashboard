@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase, migrate, seed } from '../scripts/test-database';
-import worker from './index';
+import { authenticatedWorker as worker, testSession } from '../scripts/test-auth';
 import type { HouseholdState, Mutation, Operation } from '../src/data/contracts';
 
 describe('Worker API with real local D1', () => {
@@ -12,7 +12,13 @@ describe('Worker API with real local D1', () => {
     runtime = createDatabase();
     db = (await runtime.getD1Database('DB')) as unknown as D1Database;
     await migrate(db);
-    env = { DB: db, ASSETS: { fetch: async () => new Response('shell') } as Fetcher };
+    await testSession(db);
+    env = {
+      GOOGLE_APP_ORIGIN: 'https://home.test',
+      AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      DB: db,
+      ASSETS: { fetch: async () => new Response('shell') } as Fetcher,
+    };
   });
   afterEach(async () => {
     await runtime.dispose();
@@ -219,7 +225,7 @@ describe('Worker API with real local D1', () => {
     expect((await send(mutation({ type: 'event.put', value: event }))).status).toBe(400);
     const response = await worker.fetch(new Request('https://home.test/api/missing'), env);
     expect(response.status).toBe(404);
-    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(
       (await send({ id: 'big', revision: 0, operations: [], padding: 'x'.repeat(66000) })).status,
     ).toBe(413);
@@ -247,6 +253,7 @@ describe('Worker API with real local D1', () => {
       db = (await runtime.getD1Database('DB')) as unknown as D1Database;
       env.DB = db;
       await migrate(db);
+      await testSession(db);
       await save([{ type: 'member.put', value: member }]);
       await runtime.dispose();
       runtime = createDatabase(directory);

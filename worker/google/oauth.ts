@@ -1,3 +1,5 @@
+import { requireRewardOperator } from '../reward-operator';
+import { requireHousehold } from '../household-auth';
 import { z } from 'zod';
 import { ApiError, HOUSEHOLD_ID } from '../database';
 import { decryptToken, encryptToken, encryptionKey, hash, randomToken } from './crypto';
@@ -42,11 +44,20 @@ export async function configured(env: GoogleEnv) {
   await encryptionKey(env.GOOGLE_TOKEN_ENCRYPTION_KEY);
 }
 export async function authorizeManagement(request: Request, env: GoogleEnv) {
-  if (!env.GOOGLE_ADMIN_KEY || env.GOOGLE_ADMIN_KEY.length < 32)
-    throw new ApiError(503, 'Google management is not configured.', 'google_configuration');
-  const supplied = request.headers.get('Authorization') ?? '';
-  if ((await hash(supplied)) !== (await hash(`Bearer ${env.GOOGLE_ADMIN_KEY}`)))
-    throw new ApiError(401, 'Google management authorization is required.', 'google_unauthorized');
+  // Browser operators use the existing short-lived, household-session-bound PIN token.
+  // The server-only admin credential remains available to authenticated administrative clients.
+  if (request.headers.has('X-Reward-Operator')) await requireRewardOperator(request, env);
+  else {
+    if (!env.GOOGLE_ADMIN_KEY || env.GOOGLE_ADMIN_KEY.length < 32)
+      throw new ApiError(503, 'Google management is not configured.', 'google_configuration');
+    const supplied = request.headers.get('Authorization') ?? '';
+    if ((await hash(supplied)) !== (await hash(`Bearer ${env.GOOGLE_ADMIN_KEY}`)))
+      throw new ApiError(
+        401,
+        'Google management authorization is required.',
+        'google_unauthorized',
+      );
+  }
   const origin = request.headers.get('Origin');
   if (
     (origin && origin !== appOrigin(env)) ||
@@ -98,6 +109,7 @@ export function stateCookie(env: GoogleEnv, value: string, maxAge = 600) {
   return `${cookieName(env)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${appOrigin(env).startsWith('https:') ? '; Secure' : ''}`;
 }
 export async function connect(request: Request, env: GoogleEnv) {
+  const householdSession = await requireHousehold(request, env);
   await configured(env);
   if (new URL(request.url).origin !== appOrigin(env))
     throw new ApiError(403, 'Open the configured dashboard origin to connect.', 'google_origin');
@@ -121,8 +133,15 @@ export async function connect(request: Request, env: GoogleEnv) {
       HOUSEHOLD_ID,
     ),
     env.DB.prepare(
-      'INSERT INTO google_oauth_states (state_hash,household_id,browser_hash,verifier,expires_at) VALUES (?,?,?,?,?)',
-    ).bind(await hash(state), HOUSEHOLD_ID, await hash(browser), verifier, Date.now() + 600000),
+      'INSERT INTO google_oauth_states (state_hash,household_id,browser_hash,verifier,expires_at,household_session_id) VALUES (?,?,?,?,?,?)',
+    ).bind(
+      await hash(state),
+      HOUSEHOLD_ID,
+      await hash(browser),
+      verifier,
+      Date.now() + 600000,
+      householdSession.id,
+    ),
   ]);
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.search = new URLSearchParams({
@@ -167,9 +186,11 @@ export async function callback(request: Request, env: GoogleEnv) {
     );
   // DELETE RETURNING validates and consumes in a single statement, even on a denied callback.
   const row = await env.DB.prepare(
-    'DELETE FROM google_oauth_states WHERE state_hash=? AND household_id=? AND browser_hash=? AND expires_at>? RETURNING verifier',
+    `DELETE FROM google_oauth_states WHERE state_hash=? AND household_id=? AND browser_hash=? AND expires_at>?
+      AND EXISTS (SELECT 1 FROM household_sessions s JOIN household_credentials c ON c.household_id=s.household_id AND c.version=s.credentialVersion
+        WHERE s.household_id=google_oauth_states.household_id AND s.id=google_oauth_states.household_session_id AND s.revokedAt IS NULL AND s.expiresAt>?) RETURNING verifier`,
   )
-    .bind(await hash(state), HOUSEHOLD_ID, await hash(browser), Date.now())
+    .bind(await hash(state), HOUSEHOLD_ID, await hash(browser), Date.now(), Date.now())
     .first<{ verifier: string }>();
   if (!row)
     throw new ApiError(

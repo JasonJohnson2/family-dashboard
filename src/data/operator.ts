@@ -1,3 +1,4 @@
+import { privateFetch } from './access';
 // Memory only: refresh/close locks this device. No PIN/token in browser storage.
 let session: { token: string; expiresAt: number } | undefined;
 export const operatorHeaders = (): Record<string, string> =>
@@ -7,7 +8,7 @@ export const lockOperator = () => {
   session = undefined;
 };
 export async function unlockOperator(pin: string) {
-  const response = await fetch('/api/rewards/operator', {
+  const response = await privateFetch('/api/rewards/operator', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pin }),

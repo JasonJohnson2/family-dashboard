@@ -1,3 +1,5 @@
+import { createVerifier } from '../worker/credential';
+const testVerifier = await createVerifier('test-only-household-passphrase-493827');
 // Local browser-test harness only. This file is not part of the deployed Worker.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -49,7 +51,12 @@ const server = createServer(async (req, res) => {
           headers,
           ...(body ? { body } : {}),
         }),
-        { DB: db, REWARDS_OPERATOR_PIN: 'test-only-48269173' } as Env,
+        {
+          DB: db,
+          REWARDS_OPERATOR_PIN: 'test-only-48269173',
+          HOUSEHOLD_BOOTSTRAP_VERIFIER: testVerifier,
+          AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
+        } as Env,
       );
       active.add(pending);
       let response: Response;

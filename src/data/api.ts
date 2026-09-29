@@ -1,3 +1,4 @@
+import { privateFetch } from './access';
 import { operatorHeaders } from './operator';
 import { stateSchema, type HouseholdState, type Mutation } from './contracts';
 
@@ -18,7 +19,11 @@ async function request(path: string, init?: RequestInit): Promise<HouseholdState
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const response = await fetch(path, { ...init, cache: 'no-store', signal: controller.signal });
+    const response = await privateFetch(path, {
+      ...init,
+      cache: 'no-store',
+      signal: controller.signal,
+    });
     const body = await response.json();
     if (!response.ok)
       throw new SaveError(body.error || 'Please try again.', response.status >= 500, body.code);

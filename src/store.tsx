@@ -25,6 +25,8 @@ function useHouseholdState() {
   const [today, setToday] = useState(() => dateKey(new Date()));
   const [notice, setNotice] = useState('');
   useEffect(() => {
+    const lock = () => controller.destroy();
+    window.addEventListener('household-locked', lock);
     const refresh = () => {
       if (document.visibilityState === 'visible') {
         void controller.refresh();
@@ -41,6 +43,7 @@ function useHouseholdState() {
     };
     window.addEventListener('beforeunload', beforeUnload);
     return () => {
+      window.removeEventListener('household-locked', lock);
       clearInterval(clock);
       clearInterval(timer);
       document.removeEventListener('visibilitychange', refresh);

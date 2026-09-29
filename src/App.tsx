@@ -1,3 +1,4 @@
+import { HouseholdSecurity } from './components/HouseholdSecurity';
 import { Rewards } from './components/Rewards';
 import { useEffect, useState } from 'react';
 import {
@@ -45,6 +46,7 @@ export default function App() {
     eventId?: string;
     choreId?: string;
   } | null>(null);
+  const [security, setSecurity] = useState(false);
   const [more, setMore] = useState(false);
   const [event, setEvent] = useState<EventOccurrence | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
@@ -131,6 +133,10 @@ export default function App() {
             </button>
           </nav>
           <div className="sidebar-secondary">
+            <button className="nav-item" onClick={() => setSecurity(true)}>
+              <Settings2 size={22} />
+              Household privacy
+            </button>
             <button className="nav-item" onClick={() => open('family')}>
               <Users size={22} strokeWidth={1.7} />
               Our family
@@ -186,12 +192,19 @@ export default function App() {
               </button>
               <button
                 className="hero-settings icon-button"
-                aria-label="About and installation"
-                onClick={() => open('about')}
+                aria-label="Household privacy"
+                onClick={() => setSecurity(true)}
               >
                 <Settings2 size={25} />
               </button>
             </div>
+            <button
+              className="hero-settings-mobile icon-button"
+              aria-label="Household privacy"
+              onClick={() => setSecurity(true)}
+            >
+              <Settings2 size={23} />
+            </button>
           </header>
           <div className="main-content">
             <SyncStatus />
@@ -252,6 +265,7 @@ export default function App() {
       <div className={`toast ${notice ? 'visible' : ''}`} role="status" aria-live="polite">
         {notice}
       </div>
+      {security && <HouseholdSecurity onClose={() => setSecurity(false)} />}
       {editor && (
         <Editor
           key={`${editor.kind}-${editor.eventId ?? editor.choreId ?? editor.date}`}

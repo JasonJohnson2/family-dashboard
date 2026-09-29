@@ -1,3 +1,4 @@
+import { authRoute, requireHousehold, sameOrigin } from './household-auth';
 import { operatorRequired, validateRewards } from './rewards';
 import { requireRewardOperator, rewardOperatorRoute } from './reward-operator';
 import { readJson } from './http';
@@ -14,14 +15,23 @@ import {
 const json = (body: unknown, status = 200) =>
   Response.json(body, {
     status,
-    headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+    headers: {
+      'Cache-Control': 'private, no-store',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+    },
   });
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
-    if (url.pathname.startsWith('/api/google/')) return googleRoute(request, env);
     try {
+      if (url.pathname.startsWith('/api/auth/')) return await authRoute(request, env);
+      // Callback authenticates its one-use state/browser cookie and the initiating session.
+      if (url.pathname === '/api/google/callback') return await googleRoute(request, env);
+      await requireHousehold(request, env);
+      if (request.method !== 'GET' && request.method !== 'HEAD') sameOrigin(request);
+      if (url.pathname.startsWith('/api/google/')) return await googleRoute(request, env);
       if (url.pathname === '/api/household' && request.method === 'GET')
         return json(await readState(env.DB));
       if (url.pathname !== '/api/mutations' && url.pathname !== '/api/rewards/operator')
@@ -105,7 +115,8 @@ export default {
         JSON.stringify({
           event: 'household_api_error',
           path: url.pathname,
-          message: error instanceof Error ? error.message : 'Unknown error',
+          // Do not log request bodies, tokens, or SQL exception details.
+          category: 'unavailable',
         }),
       );
       return json(

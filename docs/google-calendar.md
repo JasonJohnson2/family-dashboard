@@ -35,7 +35,7 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 New secrets to configure before connecting:
 
 - `GOOGLE_TOKEN_ENCRYPTION_KEY`: exactly 32 random bytes, encoded as standard base64 (44 characters, including the final `=`). Refresh tokens use AES-256-GCM with a fresh 12-byte IV, versioned metadata, and connection/household-bound authenticated data. Ciphertext and IV are stored in D1; access tokens are only held in memory during a request.
-- `GOOGLE_ADMIN_KEY`: a separate random management credential of at least 32 characters. All Google endpoints except the OAuth callback require `Authorization: Bearer <key>`. The existing publicly reachable household API is not authentication; without this separate guard, anyone could connect an account, enable full event details, or disconnect your account. This is a temporary operator interface, not a household login system.
+- `GOOGLE_ADMIN_KEY`: a separate random management credential of at least 32 characters, retained for administrative clients. Management requires a household session as well. Browser operators use the existing short-lived, session-bound operator PIN token instead; do not enter the Google admin key in browser JavaScript. Refresh requires household access without management privilege; callback validates its one-use OAuth flow and initiating session.
 
 With Node and pnpm installed, generate each key independently and pipe it directly into Wrangler without writing a file or printing it to the terminal:
 
@@ -73,7 +73,7 @@ The existing GitHub/Cloudflare pipeline deploy command applies pending migration
 
 Opening/navigating to Calendar or returning focus/visibility/network while Calendar is open checks cached Google data. An enabled calendar is stale after **one hour** since its last successful sync (or if it has never synced). Fresh, disconnected, disabled and cooldown checks are read-only: they do not contact Google or acquire/write a lease. Stale eligibility is checked again under the existing lease to close the multi-device race. There is no recurring Google timer on Calendar or other pages. The existing household read timer remains, so other-device changes still appear without starting Google sync.
 
-Calendar's **Sync calendars** button bypasses the one-hour stale threshold. It shows **Syncing...**, disables repeat clicks until completion, refetches household state after successful imports and shows a small result/error message. A durable **60-second** per-calendar attempt cooldown protects this public household action from repeated clicks/tabs/HTTP clients. If another sync just ran, the button reports that calendars were recently checked. Automatic failure retries are limited to **one per hour**. Both use the existing `last_attempt_at` from migration `0004`; **no new migration or secrets are needed**.
+Calendar's **Sync calendars** button bypasses the one-hour stale threshold. It shows **Syncing...**, disables repeat clicks until completion, refetches household state after successful imports and shows a small result/error message. A durable **60-second** per-calendar attempt cooldown protects this authenticated household action from repeated clicks/tabs/HTTP clients. If another sync just ran, the button reports that calendars were recently checked. Automatic failure retries are limited to **one per hour**. Both use the existing `last_attempt_at` from migration `0004`; **no new migration or secrets are needed**.
 
 All imports remain read-only, use existing encrypted OAuth tokens and respect enabled calendars, privacy and member settings. No credentials are sent to React. A failed calendar keeps its cached events; other enabled calendars can continue. Missing configuration, revoked authorization and provider failures yield only sanitized status/error messages. Invalid sync tokens still recover through a full sync. The existing fenced two-minute operation lease and atomic per-calendar batches remain in place. Slow Google requests never block `/api/household` or local saves.
 
@@ -89,31 +89,31 @@ An empty or identical incremental response therefore writes **zero event rows, z
 
 `GET /api/google/refresh` only reads non-sensitive status: `connected`, `enabledCalendars`, `lastSyncedAt`, `stale`, `syncing`, `needsAttention` and `lastFailure`. `lastSyncedAt` is the oldest successful timestamp across enabled calendars, or `null` until all have synced. `syncing` means a live Google operation lease exists. Failure codes are limited to `authorization`, `configuration`, and `unavailable`; successful sync clears a calendar's failure. The protected `/api/google/status` also includes this object as `sync`.
 
-`POST /api/google/refresh` accepts `{}` for stale refresh or `{ "manual": true }` for the button. It requires a same-origin `Origin` header and JSON content type, rejects cross-site requests and unknown fields, and returns `{ outcome, synced, status }`. Outcomes are `complete`, `busy`, `cooldown`, or `unavailable`; `synced` counts successful calendars. Inspect `status.needsAttention` for partial failures. This narrow public capability cannot choose arbitrary sources, change settings or return account details/tokens. Server-side staleness, cooldowns and leases apply regardless of caller; origin checks alone are not authentication. Management APIs still require `GOOGLE_ADMIN_KEY`.
+`POST /api/google/refresh` accepts `{}` for stale refresh or `{ "manual": true }` for the button. It requires a same-origin `Origin` header and JSON content type, rejects cross-site requests and unknown fields, and returns `{ outcome, synced, status }`. Outcomes are `complete`, `busy`, `cooldown`, or `unavailable`; `synced` counts successful calendars. Inspect `status.needsAttention` for partial failures. This narrow household capability cannot choose arbitrary sources, change settings or return account details/tokens. Server-side staleness, cooldowns and leases apply regardless of caller; origin checks alone are not authentication. Management APIs require household authentication plus an admin bearer credential or a session-bound operator token.
 
-For administrative troubleshooting, the existing protected `POST /api/google/sync` with `{}` or `{ "sourceId": "chosen-source" }` bypasses both stale and public-button cooldown checks. It still uses the shared lease, comparison and atomic sync implementation. No DevTools are needed for the normal household button. No new OAuth scopes, reconnect or manual Cloudflare setup is required for working connections. The GitHub → Cloudflare pipeline handles deployment and removal of the old trigger; existing assets, D1 binding, origin and deployment commands are unchanged.
+For administrative troubleshooting, the existing protected `POST /api/google/sync` with `{}` or `{ "sourceId": "chosen-source" }` bypasses both stale and household-button cooldown checks. It still uses the shared lease, comparison and atomic sync implementation. No DevTools are needed for the normal household button. No new OAuth scopes, reconnect or manual Cloudflare setup is required for working connections. The GitHub → Cloudflare pipeline handles deployment and removal of the old trigger; existing assets, D1 binding, origin and deployment commands are unchanged.
 
 ## API contract
 
-All responses are `no-store`; the service worker bypasses `/api/`. Management requests (everything except the limited `/refresh` capability and OAuth callback) require the admin bearer header, and browser requests must originate from `GOOGLE_APP_ORIGIN`. OAuth callbacks instead require a cryptographically random, 10-minute, single-use state record bound to an HttpOnly SameSite=Lax cookie. PKCE adds an authorization-code binding. The callback redirects only to the configured dashboard calendar.
+All responses are `no-store`; the service worker bypasses `/api/`. Every route except callback requires a household cookie. Management requests (everything except `/refresh` and callback) additionally require an admin bearer header or `X-Reward-Operator` token, and browser requests must originate from `GOOGLE_APP_ORIGIN`. OAuth callbacks instead require a cryptographically random, 10-minute, single-use state record bound to an HttpOnly SameSite=Lax cookie. The OAuth state also references a still-valid household session. PKCE adds an authorization-code binding. The callback redirects only to the configured dashboard calendar.
 
-| Endpoint                      | Request                                                        | Result                                                                                          |
-| ----------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GET /api/google/refresh`     | No management key                                              | Non-sensitive cached sync status; no Google request                                             |
-| `POST /api/google/refresh`    | Same-origin JSON `{}` or `{ manual: true }`; no management key | Stale/manual sync with server cooldown and status                                               |
-| `GET /api/google/connect`     | Admin header                                                   | `{ authorizationUrl }` plus OAuth state cookie; navigate to this Google URL in the same browser |
-| `GET /api/google/callback`    | Google code/state and matching cookie                          | Connects account, then redirects to `/#calendar`; sanitized JSON error on failure               |
-| `GET /api/google/status`      | Admin header                                                   | `{ configured, connected, accountId, email, scopes }`; no credentials                           |
-| `GET /api/google/calendars`   | Admin header                                                   | Discovers all readable calendars with pagination; returns `{ calendars }`                       |
-| `PATCH /api/google/calendars` | `{ sourceId, enabled, privacyMode, memberId? }`                | Saves selection/privacy/member and returns `{ calendar }`                                       |
-| `POST /api/google/sync`       | `{}` or `{ sourceId }`                                         | Syncs enabled calendars, returning `{ synced: [{ sourceId, imported, full }] }`                 |
-| `POST /api/google/disconnect` | `{}`                                                           | Removes local Google connection/imports and returns `{ connected: false }`                      |
+| Endpoint                      | Request                                                       | Result                                                                                          |
+| ----------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /api/google/refresh`     | Household cookie; no operator token                           | Non-sensitive cached sync status; no Google request                                             |
+| `POST /api/google/refresh`    | Household cookie; same-origin JSON `{}` or `{ manual: true }` | Stale/manual sync with server cooldown and status                                               |
+| `GET /api/google/connect`     | Household cookie + management authorization                   | `{ authorizationUrl }` plus OAuth state cookie; navigate to this Google URL in the same browser |
+| `GET /api/google/callback`    | Google code/state and matching cookie                         | Connects account, then redirects to `/#calendar`; sanitized JSON error on failure               |
+| `GET /api/google/status`      | Household cookie + management authorization                   | `{ configured, connected, accountId, email, scopes }`; no credentials                           |
+| `GET /api/google/calendars`   | Household cookie + management authorization                   | Discovers all readable calendars with pagination; returns `{ calendars }`                       |
+| `PATCH /api/google/calendars` | `{ sourceId, enabled, privacyMode, memberId? }`               | Saves selection/privacy/member and returns `{ calendar }`                                       |
+| `POST /api/google/sync`       | `{}` or `{ sourceId }`                                        | Syncs enabled calendars, returning `{ synced: [{ sourceId, imported, full }] }`                 |
+| `POST /api/google/disconnect` | `{}`                                                          | Removes local Google connection/imports and returns `{ connected: false }`                      |
 
 Calendar entries contain `googleId`, `sourceId`, `name`, `color`, `primary`, `enabled`, `privacyMode`, `memberId` (or `null`), and `lastSyncedAt`. Sync tokens, ciphertext, IVs, access tokens and refresh tokens are never in API responses. JSON bodies have the existing 64 KiB bound. Unknown settings and supplied event payloads are rejected.
 
 Newly discovered calendars are disabled and use `busy`. Rediscovery preserves choices and removes imports for calendars no longer accessible. It never enables all calendars. Select an individual calendar deliberately; automatic refresh then keeps it current. Manual sync remains available to force an immediate refresh. Source IDs are derived from the connection and calendar identity. Each calendar may be mapped to one existing household member using `memberId`. Omit `memberId` to preserve an existing mapping (backward-compatible with earlier clients); send `null` to clear it. Assignment changes immediately update existing imported events without contacting Google or resetting the sync token. New and updated imports use the same member through the existing `event_members` table, so normal member colors, avatars and filters apply even in busy mode. Disabled calendars retain their mapping for re-enabling. Unassigned calendars keep the existing Everyone behavior. Clear or reassign a calendar mapping before deleting its member; household-scoped foreign keys prevent dangling or cross-household assignments.
 
-The existing household read endpoint is still publicly accessible unless the deployment has external access control. Any imported projection is visible to people who can open the dashboard. The admin key protects integration management, **not** household viewing. Choose privacy settings with that access model in mind.
+The household read endpoint and imported projections require household authentication. Member selection does not grant access. Choose privacy modes for everyone who shares trusted household access; management remains separately privileged.
 
 ## Connecting and syncing during development
 
@@ -132,12 +132,18 @@ pnpm db:migrate:local
 pnpm exec wrangler dev --port 8787
 ```
 
-Open `http://localhost:8787`. Until Phase 2 provides an operator UI, run this in that page's developer console. The same workflow works on the production origin using the production admin key. Do not paste the key into source code or share the console session:
+Configure a development household credential using [household access setup](household-access.md), open `http://localhost:8787`, and sign in. Until a fuller Google management UI exists, use the following temporary operator-console flow on this authenticated origin (also works on production). It exchanges the operator PIN for a short-lived token; **never paste GOOGLE_ADMIN_KEY into browser JavaScript**. Do not share a console session.
 
 ```js
-const admin = prompt('Google management key');
+const unlock = await fetch('/api/rewards/operator', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ pin: prompt('Operator PIN') }),
+});
+if (!unlock.ok) throw new Error('Operator unlock failed');
+const operator = await unlock.json();
 const response = await fetch('/api/google/connect', {
-  headers: { Authorization: `Bearer ${admin}` },
+  headers: { 'X-Reward-Operator': operator.token },
 });
 const result = await response.json();
 if (!response.ok) throw new Error(result.error);
@@ -147,12 +153,18 @@ location.assign(result.authorizationUrl);
 After Google redirects back, a new console session can discover, select, and sync:
 
 ```js
-const admin = prompt('Google management key');
+const unlock = await fetch('/api/rewards/operator', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ pin: prompt('Operator PIN') }),
+});
+if (!unlock.ok) throw new Error('Operator unlock failed');
+const operator = await unlock.json();
 async function google(path, method = 'GET', body) {
   const response = await fetch('/api/google/' + path, {
     method,
     headers: {
-      Authorization: `Bearer ${admin}`,
+      'X-Reward-Operator': operator.token,
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -171,7 +183,7 @@ await google('calendars', 'PATCH', { sourceId, enabled: true, privacyMode: 'busy
 await google('sync', 'POST', { sourceId });
 ```
 
-Use **Refresh household** to display imports. Status is `await google('status')`. To disable a calendar, PATCH it with `enabled: false`. To disconnect, call `await google('disconnect', 'POST', {})`. Reload the tab to discard console variables containing the admin key. Phase 2 should replace this manual interface with an appropriately protected management session/UI; do not bundle the admin credential into React.
+Use **Refresh household** to display imports. Status is `await google('status')`. To disable a calendar, PATCH it with `enabled: false`. To disconnect, call `await google('disconnect', 'POST', {})`. Reload the tab to discard the temporary operator token. Phase 2 should replace this manual interface with an appropriately protected management session/UI; do not bundle the admin credential into React.
 
 ## Sync and privacy decisions
 
@@ -201,4 +213,4 @@ pnpm test:e2e
 
 References: [Google web-server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync), [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list), [calendarList.list](https://developers.google.com/workspace/calendar/api/v3/reference/calendarList/list).
 
-Sync coverage includes read-only fresh/no-op checks, one-hour staleness, the public manual button and cooldown, shared-lease concurrency, failure isolation, credential protection, incremental/410 recovery, no-change D1 write counts, and Calendar-only browser refresh without delaying household rendering.
+Sync coverage includes read-only fresh/no-op checks, one-hour staleness, the household manual button and cooldown, shared-lease concurrency, failure isolation, credential protection, incremental/410 recovery, no-change D1 write counts, and Calendar-only browser refresh without delaying household rendering.

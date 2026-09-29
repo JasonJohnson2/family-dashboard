@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import { loginHousehold } from './access-fixture';
+import { test, expect } from './fixtures';
 import type { HouseholdState } from '../src/data/contracts';
 
 test.use({ serviceWorkers: 'block' });
@@ -8,6 +9,7 @@ test('automatic refresh leaves the dashboard usable while Google is slow and dis
   request,
 }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
   const state: HouseholdState = await (await request.get('/api/household')).json();
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -63,6 +65,7 @@ test('automatic refresh leaves the dashboard usable while Google is slow and dis
 
 test('Google checks are Calendar-only and do not poll every minute', async ({ page, request }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
   await page.clock.install();
   let refreshes = 0;
   await page.route('**/api/google/refresh', (route) => {
@@ -90,6 +93,7 @@ test('Sync calendars bypasses freshness, prevents overlapping clicks and shows e
   request,
 }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
   const state: HouseholdState = await (await request.get('/api/household')).json();
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -162,6 +166,7 @@ test('Google projections use the assigned member color, filter and identity whil
   request,
 }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
   const state: HouseholdState = await (await request.get('/api/household')).json();
   const member = state.family[1],
     other = state.family[0];

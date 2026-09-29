@@ -28,7 +28,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
   const path = new URL(request.url).pathname;
   try {
     if (path === '/api/google/refresh') {
-      // Public capability is limited to checking status / refreshing already-enabled stale data.
+      // Household capability is limited to checking status / refreshing already-enabled stale data.
       // Only the manual flag may bypass staleness; its durable short cooldown still applies.
       if (request.method === 'GET') return json(await syncStatus(env.DB));
       if (request.method !== 'POST') throw new ApiError(405, 'Use GET or POST for refresh.');

@@ -1,3 +1,4 @@
+import { privateFetch } from './access';
 // Independent from household reads/writes: slow Google calls never hold up rendering or saves.
 export class GoogleRefreshController {
   private pending?: Promise<void>;
@@ -26,7 +27,7 @@ export class GoogleRefreshController {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120_000);
       try {
-        const response = await fetch('/api/google/refresh', {
+        const response = await privateFetch('/api/google/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(manual ? { manual: true } : {}),

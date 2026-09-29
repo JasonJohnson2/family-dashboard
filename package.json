@@ -25,14 +25,15 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "cf:types": "wrangler types --env-interface Env --include-runtime false",
+    "cf:types": "wrangler types --env-interface Env --include-runtime false --strict-vars false",
     "db:create": "wrangler d1 create family-dashboard",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "db:seed:local": "tsx scripts/seed.ts --demo",
     "db:seed:starter": "tsx scripts/seed.ts --remote",
     "db:seed:generate": "tsx scripts/seed.ts --generate-only",
-    "test:server": "tsx scripts/test-server.ts"
+    "test:server": "tsx scripts/test-server.ts",
+    "auth:credential": "tsx scripts/access-credential.ts"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",

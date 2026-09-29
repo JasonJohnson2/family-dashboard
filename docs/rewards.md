@@ -1,6 +1,6 @@
 # Rewards V1
 
-Rewards uses the existing household API, D1 binding, revision/conflict handling, and responsive components. No account system or Google integration changes are involved.
+Rewards uses the existing household API, D1 binding, revision/conflict handling, and responsive components. Household sessions now protect all private routes; see [household access](household-access.md). Member choice remains separate from device authentication.
 
 ## Setup and migration
 
@@ -16,7 +16,7 @@ Without that secret, viewing Rewards and existing chore behavior work, but manag
 
 The PIN protects reward creation/editing/deletion, approval/decline, manual adjustments, and creating/editing/deleting paid chores. The Worker enforces this on every privileged mutation. Completing chores and requesting/redeeming eligible rewards retain the application's shared-household access model. A member selection is a household choice, not authenticated proof of identity.
 
-Unlocking issues a random token valid for 15 minutes. Only a hash bound to the configured PIN is stored in D1; the browser holds the token in memory, never local storage or a cookie. Reloading or locking clears browser access. One operator session is active per household; unlocking another device replaces the previous session. Changing the PIN invalidates existing sessions. Tokens are checked server-side, including their expiration.
+Unlocking issues a random token valid for 15 minutes. Only a hash bound to the configured PIN is stored in D1; the browser holds the token in memory, never local storage or a cookie. Reloading or locking clears browser access. One operator session is active per household; unlocking another device replaces the previous session. Changing the PIN invalidates existing sessions. Tokens are checked server-side, including their expiration, and bound to the authenticated household session that unlocked them. Household revocation/logout/credential changes invalidate that access.
 
 The unlock endpoint allows five attempts per household per fixed 15-minute window. A blocked attempt performs no further row update. This deliberately bounds PIN guessing and database writes; a household sharing the public URL may need to wait after repeated attempts. Household reads do not access or expose PIN/session records. Existing same-origin/JSON guards also apply. The Google admin key and credentials are unrelated and remain server-only.
 

@@ -3433,3 +3433,160 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Household access uses the same scenery, type, cards and touch targets as the dashboard. */
+[hidden] {
+  display: none !important;
+}
+.access-screen {
+  margin-left: 0;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background:
+    linear-gradient(160deg, #163c4b88, #eef4f5cc 80%),
+    url('/landscape.jpg') center / cover fixed;
+}
+.access-card {
+  width: min(100%, 460px);
+  padding: 36px;
+  border: 1px solid #ffffffb3;
+  border-radius: 30px;
+  background: #ffffffed;
+  box-shadow: 0 16px 65px #17364625;
+}
+.access-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 25px;
+  font-weight: 700;
+  color: #294b50;
+  margin-bottom: 30px;
+}
+.access-card h1 {
+  margin: 12px 0;
+  font-size: clamp(28px, 5vw, 36px);
+  letter-spacing: -1px;
+}
+.access-card p {
+  line-height: 1.6;
+}
+.access-card form,
+.household-security form {
+  display: grid;
+  gap: 18px;
+}
+.access-card label,
+.household-security label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.access-card input:not([type='checkbox']),
+.household-security input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #d4e0e5;
+  border-radius: 12px;
+  padding: 12px;
+  background: white;
+  font: inherit;
+  font-size: 16px;
+}
+.access-card .access-trust {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.access-trust input {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  margin-top: 2px;
+  accent-color: #4a7c77;
+}
+.access-trust small,
+.device-list small {
+  display: block;
+  font-weight: 400;
+  line-height: 1.6;
+  color: #526770;
+  margin-top: 5px;
+}
+.access-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-size: 13px;
+  color: #526770;
+  margin: 28px 0 0;
+}
+.household-security {
+  display: grid;
+  gap: 20px;
+}
+.household-security h3,
+.household-security p {
+  margin: 0;
+}
+.device-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.device-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid #e4ecef;
+}
+.device-list strong {
+  overflow-wrap: anywhere;
+}
+.security-confirm {
+  padding: 20px;
+  border-radius: 16px;
+  background: #eef4f5;
+  border: 1px solid #d4e0e5;
+}
+@media (max-width: 480px) {
+  .access-card {
+    padding: 28px 24px;
+  }
+  .access-screen {
+    padding: 20px 14px;
+  }
+}
+
+.hero-settings-mobile {
+  display: none;
+}
+@media (max-width: 999px) {
+  .hero-settings-mobile {
+    display: flex;
+    position: absolute;
+    right: 18px;
+    top: 12px;
+    width: 44px;
+    height: 44px;
+    color: white;
+    background: #183d4b55;
+    border-radius: 14px;
+  }
+}
+
+.access-screen::before {
+  display: none;
+}
+
+.access-card .muted,
+.access-card .eyebrow,
+.household-security .muted {
+  color: #526770;
+}

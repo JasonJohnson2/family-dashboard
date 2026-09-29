@@ -1,6 +1,11 @@
+import rawWorker from '../index';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyMigration, createDatabase, migrate } from '../../scripts/test-database';
-import worker from '../index';
+import {
+  authenticatedWorker as worker,
+  testSession,
+  shareTestSession,
+} from '../../scripts/test-auth';
 import { SCOPES } from './oauth';
 import { decryptToken, encryptToken } from './crypto';
 import { calendars, commit, connection, withLease } from './storage';
@@ -149,9 +154,11 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     runtime = createDatabase();
     db = (await runtime.getD1Database('DB')) as unknown as D1Database;
     await migrate(db);
+    await testSession(db);
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-21T12:00:00Z'));
     env = {
+      AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
       DB: db,
       ASSETS: { fetch: async () => new Response('shell') } as Fetcher,
       GOOGLE_APP_ORIGIN: ORIGIN,
@@ -330,8 +337,55 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
         return results;
       },
     } as D1Database;
+    shareTestSession(db, env.DB);
     return () => rows;
   }
+
+  it('allows household operators to manage Google without exposing the Google admin key', async () => {
+    env.REWARDS_OPERATOR_PIN = 'test-only-48269173';
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/api/rewards/operator`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: env.REWARDS_OPERATOR_PIN }),
+      }),
+      env,
+    );
+    expect(response.status).toBe(200);
+    const token = ((await response.json()) as { token: string }).token;
+    const headers = { Authorization: '', 'X-Reward-Operator': token };
+    const start = await call('connect', 'GET', undefined, headers);
+    expect(start.status).toBe(200);
+    expect(await start.clone().text()).not.toContain(ADMIN);
+    const url = new URL(((await start.json()) as { authorizationUrl: string }).authorizationUrl);
+    expect(
+      (await finish({ url, cookie: start.headers.get('Set-Cookie')!.split(';')[0] })).status,
+    ).toBe(303);
+    expect((await call('calendars', 'GET', undefined, headers)).status).toBe(200);
+    expect(
+      (await call('status', 'GET', undefined, { ...headers, Origin: 'https://evil.test' })).status,
+    ).toBe(403);
+    expect(
+      (await call('status', 'GET', undefined, { ...headers, 'X-Reward-Operator': 'bad' })).status,
+    ).toBe(403);
+  });
+
+  it('accepts the Google callback with its OAuth cookie alone, but rejects a revoked initiating device', async () => {
+    let start = await begin();
+    const response = await rawWorker.fetch(
+      new Request(
+        `${ORIGIN}/api/google/callback?state=${start.url.searchParams.get('state')}&code=test-code`,
+        { headers: { Cookie: start.cookie } },
+      ),
+      env,
+    );
+    expect(response.status).toBe(303);
+    await call('disconnect', 'POST', {});
+    start = await begin();
+    await db.prepare('UPDATE household_sessions SET revokedAt=?').bind(Date.now()).run();
+    expect((await finish(start)).status).toBe(400);
+    expect(await connection(db)).toBeNull();
+  });
 
   it('removes the scheduled handler and explicitly clears deployed cron triggers', () => {
     expect('scheduled' in worker).toBe(false);
@@ -443,14 +497,26 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     db = (await runtime.getD1Database('DB')) as unknown as D1Database;
     env.DB = db;
     await migrate(db, '0003_google_calendar_members.sql');
-    const source = await selected('title');
+    // Build a genuine legacy fixture without calling today's authenticated routes.
+    const source = await sourceId('legacy-connection', 'primary@example.test');
+    const encrypted = await encryptToken(REFRESH, KEY, 'legacy-connection');
     await members();
-    await settings(source, 'robin', 'title');
-    await db
-      .prepare(
-        "UPDATE google_calendars SET sync_token='existing-token',last_synced_at='2026-09-21T12:00:00.000Z'",
-      )
-      .run();
+    await db.batch([
+      db
+        .prepare(
+          'INSERT INTO google_connections (household_id,id,refresh_ciphertext,refresh_iv,encryption_version,scopes) VALUES (?,?,?,?,?,?)',
+        )
+        .bind('home', 'legacy-connection', encrypted.ciphertext, encrypted.iv, 1, SCOPES.join(' ')),
+      db
+        .prepare("INSERT INTO calendar_sources VALUES ('home',?,'Work','google','#123456')")
+        .bind(source),
+      db
+        .prepare(
+          "INSERT INTO google_calendars (household_id,google_id,source_id,name,color,enabled,privacy_mode,sync_token,last_synced_at,projection_version) VALUES ('home','primary@example.test',?,'Work','#123456',1,'title','existing-token','2026-09-21T12:00:00.000Z',1)",
+        )
+        .bind(source),
+      db.prepare("INSERT INTO google_calendar_members VALUES ('home',?,'robin')").bind(source),
+    ]);
     // Snapshot the legacy schema directly: the current household reader also
     // expects Rewards tables, which intentionally do not exist at this point.
     const snapshot = async () =>
@@ -485,6 +551,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     });
     expect(await snapshot()).toEqual(before.state);
     await applyMigration(db, '0005_rewards.sql');
+    await applyMigration(db, '0006_household_access.sql');
+    await testSession(db);
     requests = [];
     await automatic();
     expect(requests).toHaveLength(0);
@@ -904,6 +972,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     await applyMigration(db, '0003_google_calendar_members.sql');
     await applyMigration(db, '0004_google_sync_status.sql');
     await applyMigration(db, '0005_rewards.sql');
+    await applyMigration(db, '0006_household_access.sql');
+    await testSession(db);
     expect(await connection(db)).toEqual(before);
     expect((await calendars(db))[0]).toMatchObject({
       enabled: 1,

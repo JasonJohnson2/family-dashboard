@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { loginHousehold } from './access-fixture';
+import { test, expect, type APIRequestContext, type Page } from './fixtures';
 import type { HouseholdState, Operation } from '../src/data/contracts';
 import { starBalance, type Reward } from '../src/data/rewards';
 
@@ -7,6 +8,7 @@ test.setTimeout(60_000);
 const pin = 'test-only-48269173';
 async function prepare(request: APIRequestContext) {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
   const login = await request.post('/api/rewards/operator', { data: { pin } });
   const { token } = await login.json();
   let latest = (await (await request.get('/api/household')).json()) as HouseholdState;

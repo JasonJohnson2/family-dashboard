@@ -1,10 +1,12 @@
-import { test, expect } from '@playwright/test';
+import { loginHousehold } from './access-fixture';
+import { test, expect } from './fixtures';
 
 // Network-failure injection must bypass service-worker-owned requests in WebKit.
 test.use({ serviceWorkers: 'block' });
 
 test.beforeEach(async ({ request }) => {
   expect((await request.post('/__test/reset')).ok()).toBe(true);
+  await loginHousehold(request);
 });
 
 test('a new device loads saved data and an existing device refetches on return', async ({
@@ -12,7 +14,8 @@ test('a new device loads saved data and an existing device refetches on return',
   browser,
 }) => {
   await page.goto('/#lists');
-  const context = await browser.newContext();
+  const context = await browser.newContext({ baseURL: 'http://localhost:4173' });
+  await loginHousehold(context.request);
   const second = await context.newPage();
   try {
     await second.goto('http://localhost:4173/#lists');

@@ -32,6 +32,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 describe('API-backed optimistic store', () => {
+  it('clears private state and cancels queued saves when household access ends', async () => {
+    const inFlight = deferred<HouseholdState>();
+    const api: HouseholdApi = {
+      load: vi.fn().mockResolvedValue(initial()),
+      save: vi.fn().mockReturnValue(inFlight.promise),
+    };
+    const store = new HouseholdController(api);
+    await store.refresh();
+    const first = store.mutate([check(true)]).catch((e) => e.message);
+    const second = store.mutate([check(false)]).catch((e) => e.message);
+    store.destroy();
+    expect(store.getSnapshot().data).toBeUndefined();
+    expect(await first).toContain('access ended');
+    expect(await second).toContain('access ended');
+    inFlight.resolve(initial());
+    await Promise.resolve();
+    await store.refresh();
+    expect(api.save).toHaveBeenCalledTimes(1);
+    expect(api.load).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().data).toBeUndefined();
+  });
   it('reloads after an older in-flight read when a provider import completes', async () => {
     const oldRead = deferred<HouseholdState>();
     const latest = initial();
