@@ -94,6 +94,7 @@ export class DavError extends ApiError {
     public davStatus: number,
     public invalidToken = false,
     public unsupportedExpansion = false,
+    public resourceRequest = false,
   ) {
     super(
       davStatus === 401 ? 401 : 502,
@@ -112,9 +113,9 @@ export function client(account: string, password: string, budget?: { remaining: 
   );
   let calls = 0;
   const deadline = Date.now() + 90_000;
-  return async (
+  const request = async (
     href: string,
-    method: 'PROPFIND' | 'REPORT',
+    method: 'PROPFIND' | 'REPORT' | 'GET',
     body: string,
     depth: string | null = '0',
   ) => {
@@ -134,10 +135,14 @@ export function client(account: string, password: string, budget?: { remaining: 
             method,
             headers: {
               Authorization: `Basic ${auth}`,
-              'Content-Type': 'application/xml; charset=utf-8',
-              ...(depth === null ? {} : { Depth: depth }),
+              ...(method === 'GET'
+                ? { Accept: 'text/calendar' }
+                : {
+                    'Content-Type': 'application/xml; charset=utf-8',
+                    ...(depth === null ? {} : { Depth: depth }),
+                  }),
             },
-            body,
+            ...(method === 'GET' ? {} : { body }),
             redirect: 'manual',
             signal: AbortSignal.timeout(Math.min(15000, deadline - Date.now())),
           },
@@ -159,7 +164,7 @@ export function client(account: string, password: string, budget?: { remaining: 
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const target = response.headers.get('Location');
         await response.body?.cancel();
-        if (!target) throw new DavError(response.status);
+        if (!target) throw new DavError(response.status, false, false, method === 'GET');
         url = safeUrl(target, url);
         continue;
       }
@@ -211,19 +216,42 @@ export function client(account: string, password: string, budget?: { remaining: 
             /* safe generic failure */
           }
         }
-        throw new DavError(response.status, invalidToken, unsupportedExpansion);
+        throw new DavError(response.status, invalidToken, unsupportedExpansion, method === 'GET');
       }
-      const root = xml(text);
+      return { text, url, status: response.status, etag: response.headers.get('ETag') };
+    }
+    throw new ApiError(502, 'iCloud redirected too many times.', 'icloud_response');
+  };
+  return Object.assign(
+    async (
+      href: string,
+      method: 'PROPFIND' | 'REPORT',
+      body: string,
+      depth: string | null = '0',
+    ) => {
+      const result = await request(href, method, body, depth);
+      const root = xml(result.text);
       if (root.name !== 'multistatus' || root.ns !== DAV)
         throw new ApiError(
           502,
           'iCloud returned an incomplete calendar response.',
           'icloud_response',
         );
-      return { root, url };
-    }
-    throw new ApiError(502, 'iCloud redirected too many times.', 'icloud_response');
-  };
+      return { root, url: result.url };
+    },
+    {
+      resource: async (href: string, calendar: string) => {
+        const result = await request(resourceUrl(href, calendar), 'GET', '', null);
+        if (result.status !== 200 || !result.etag || !result.text.trim())
+          throw new ApiError(
+            502,
+            'iCloud returned incomplete event data. Saved events are unchanged.',
+            'icloud_response',
+          );
+        return { etag: result.etag, ics: result.text };
+      },
+    },
+  );
 }
 export function responses(root: Node) {
   return children(root, 'response').map((row) => {

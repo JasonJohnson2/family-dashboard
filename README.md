@@ -167,3 +167,5 @@ Migration `0007_member_roles.sql` defaults every existing member to Adult withou
 ## Apple/iCloud Calendar
 
 Read-only iCloud Calendar is available through Calendar → Calendar connections using the household operator PIN and an Apple app-specific password. Newly discovered calendars are disabled by default. Choose privacy and an optional member mapping, then save/sync. The additive migration `0008_icloud_calendar.sql` is applied by the existing Cloudflare deployment pipeline; no manual production deployment is needed. See [the exact Apple setup, security and sync guide](docs/icloud-calendar.md). Local and Google plans continue to use the same calendar UI.
+
+Google Calendar can be managed through **Settings → Calendar Connections** (phone: **More → Settings**), protected by the household operator PIN. See [Google Calendar setup and recovery](docs/google-calendar.md#household-connection-management) for connect, reconnect, calendar selection, privacy/member mapping, sync and confirmed disconnect.

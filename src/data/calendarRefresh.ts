@@ -58,10 +58,7 @@ export class CalendarRefreshController {
                   .join(' / ');
                 return `${label}: ${d.message} (${details}).`;
               }
-              if (
-                provider.status.requiresReconnect ||
-                provider.status.lastFailure === 'authorization'
-              )
+              if (provider.status.requiresReconnect)
                 return `${label} sign-in needs attention. Reconnect ${label} Calendar.`;
               if (provider.status.lastFailure === 'configuration')
                 return `${label} credential configuration needs attention.`;

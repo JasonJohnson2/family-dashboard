@@ -1,3 +1,5 @@
+import { CalendarConnections } from './components/CalendarConnections';
+import { Modal } from './components/ui';
 import { HouseholdSecurity } from './components/HouseholdSecurity';
 import { Rewards } from './components/Rewards';
 import { useEffect, useState } from 'react';
@@ -33,7 +35,7 @@ const navigation = [
   { id: 'rewards', label: 'Rewards', icon: Trophy },
 ] as const;
 function getSection(): Section {
-  const section = location.hash.slice(1);
+  const section = location.hash.slice(1).split('?')[0];
   return navigation.some((item) => item.id === section) ? (section as Section) : 'home';
 }
 export default function App() {
@@ -47,12 +49,15 @@ export default function App() {
     choreId?: string;
   } | null>(null);
   const [security, setSecurity] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [connections, setConnections] = useState(() => location.hash.startsWith('#connections'));
   const [more, setMore] = useState(false);
   const [event, setEvent] = useState<EventOccurrence | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
     const onHash = () => {
       setSection(getSection());
+      setConnections(location.hash.startsWith('#connections'));
       setMore(false);
       window.scrollTo({ top: 0 });
     };
@@ -131,8 +136,23 @@ export default function App() {
               <Ellipsis size={22} />
               <span>More</span>
             </button>
+            <button
+              aria-label="Settings"
+              className={`nav-item nav-extra mobile-settings ${more ? 'more-open' : ''}`}
+              onClick={() => {
+                setMore(false);
+                setSettings(true);
+              }}
+            >
+              <Settings2 size={22} />
+              <span>Settings</span>
+            </button>
           </nav>
           <div className="sidebar-secondary">
+            <button className="nav-item" onClick={() => setSettings(true)}>
+              <Settings2 size={22} />
+              Settings
+            </button>
             <button className="nav-item" onClick={() => setSecurity(true)}>
               <Settings2 size={22} />
               Household privacy
@@ -265,6 +285,39 @@ export default function App() {
       <div className={`toast ${notice ? 'visible' : ''}`} role="status" aria-live="polite">
         {notice}
       </div>
+      {settings && (
+        <Modal title="Settings" onClose={() => setSettings(false)}>
+          <div className="editor-fields">
+            <button
+              className="outline-button"
+              onClick={() => {
+                setSettings(false);
+                location.hash = 'connections';
+                setConnections(true);
+              }}
+            >
+              Calendar Connections
+            </button>
+            <button
+              className="outline-button"
+              onClick={() => {
+                setSettings(false);
+                setSecurity(true);
+              }}
+            >
+              Household privacy
+            </button>
+          </div>
+        </Modal>
+      )}
+      {connections && (
+        <CalendarConnections
+          onClose={() => {
+            setConnections(false);
+            location.hash = 'calendar';
+          }}
+        />
+      )}
       {security && <HouseholdSecurity onClose={() => setSecurity(false)} />}
       {editor && (
         <Editor

@@ -135,7 +135,7 @@ it('gives reconnect guidance for revoked Google credentials without blaming iClo
         providers: {
           google: {
             outcome: 'complete',
-            status: { needsAttention: true, lastFailure: 'authorization' },
+            status: { needsAttention: true, lastFailure: 'authorization', requiresReconnect: true },
           },
           icloud: { outcome: 'complete', synced: 1, status: { needsAttention: false } },
         },

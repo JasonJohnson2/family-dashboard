@@ -4,16 +4,8 @@ import { operatorHeaders, operatorUnlocked } from '../data/operator';
 import { useHousehold } from '../store';
 import { Modal } from './ui';
 import { RewardOperator } from './RewardOperator';
-type Calendar = {
-  sourceId: string;
-  name: string;
-  color: string;
-  enabled: boolean;
-  privacyMode: 'busy' | 'title' | 'full';
-  memberId: string | null;
-  lastSyncedAt: string | null;
-  lastFailure: string | null;
-};
+import { GoogleCalendarConnection } from './GoogleCalendarConnection';
+import { CalendarSettings, type ExternalCalendar as Calendar } from './ExternalCalendarSettings';
 type State = {
   configured: boolean;
   connected: boolean;
@@ -39,13 +31,23 @@ export function CalendarConnections({ onClose }: { onClose: () => void }) {
   const { refresh, calendarRefresh } = useHousehold();
   const [state, setState] = useState<State>();
   const [summary, setSummary] = useState<{
-    google: { status: { connected: boolean } };
+    google: {
+      status: {
+        connected: boolean;
+        requiresReconnect?: boolean;
+        needsAttention?: boolean;
+        lastFailure?: string | null;
+        lastSyncedAt?: string | null;
+      };
+    };
     icloud: { status: { connected: boolean } };
   }>();
-  const [busy, setBusy] = useState(false),
+  const [icloudBusy, setBusy] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),
     [message, setMessage] = useState('');
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const busy = icloudBusy || googleBusy;
   const [confirm, setConfirm] = useState(false),
     [editCredentials, setEditCredentials] = useState(false);
   const [, render] = useState(0),
@@ -94,28 +96,26 @@ export function CalendarConnections({ onClose }: { onClose: () => void }) {
           Bring your plans together. Connected calendars are read only; edit their events in the
           original calendar app.
         </p>
-        <section className="connection-section">
-          <h3>Google Calendar</h3>
-          <p>
-            {summary?.google.status.connected
-              ? 'Connected · Existing calendar settings are preserved.'
-              : 'Not connected'}
-          </p>
-        </section>
-        <section className="connection-section">
+        <RewardOperator
+          onChange={() => {
+            if (!operatorUnlocked()) {
+              setState(undefined);
+              setAccount('');
+              setConfirm(false);
+              setEditCredentials(false);
+            }
+            render((n) => n + 1);
+          }}
+        />
+        <GoogleCalendarConnection
+          unlocked={unlocked}
+          summary={summary?.google.status}
+          blocked={icloudBusy}
+          onBusy={setGoogleBusy}
+        />
+        <section className="connection-section" aria-label="iCloud Calendar connection">
           <h3>Apple iCloud Calendar</h3>
           <p>{summary?.icloud.status.connected ? 'Connected' : 'Not connected'}</p>
-          <RewardOperator
-            onChange={() => {
-              if (!operatorUnlocked()) {
-                setState(undefined);
-                setAccount('');
-                setConfirm(false);
-                setEditCredentials(false);
-              }
-              render((n) => n + 1);
-            }}
-          />
           {!unlocked && (
             <p className="muted">
               Unlock with the household operator PIN to connect or change calendars.
@@ -317,87 +317,5 @@ export function CalendarConnections({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </Modal>
-  );
-}
-function CalendarSettings({
-  calendar,
-  busy,
-  save,
-}: {
-  calendar: Calendar;
-  busy: boolean;
-  save: (settings: {
-    sourceId: string;
-    enabled: boolean;
-    privacyMode: Calendar['privacyMode'];
-    memberId: string | null;
-  }) => void;
-}) {
-  const { family } = useHousehold();
-  const [enabled, setEnabled] = useState(calendar.enabled),
-    [privacyMode, setPrivacy] = useState(calendar.privacyMode),
-    [memberId, setMember] = useState(calendar.memberId ?? '');
-  const changed =
-    enabled !== calendar.enabled ||
-    privacyMode !== calendar.privacyMode ||
-    memberId !== (calendar.memberId ?? '');
-  return (
-    <form
-      className="external-calendar-settings"
-      onSubmit={(e) => {
-        e.preventDefault();
-        save({ sourceId: calendar.sourceId, enabled, privacyMode, memberId: memberId || null });
-      }}
-    >
-      <fieldset disabled={busy} className="editor-fields">
-        <legend>{calendar.name}</legend>
-        <label className="toggle-label">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Show on dashboard
-        </label>
-        <label>
-          Assigned to
-          <select value={memberId} onChange={(e) => setMember(e.target.value)}>
-            <option value="">Everyone</option>
-            {family.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Privacy
-          <select
-            aria-label="Privacy"
-            value={privacyMode}
-            onChange={(e) => setPrivacy(e.target.value as Calendar['privacyMode'])}
-          >
-            <option value="busy">Busy only</option>
-            <option value="title">Title and time</option>
-            <option value="full">Full details</option>
-          </select>
-        </label>
-        <small>
-          {privacyMode === 'busy'
-            ? 'Only times and “Busy” are saved.'
-            : privacyMode === 'title'
-              ? 'Titles and times are saved; notes and locations are omitted.'
-              : 'Titles, times, notes and locations are saved.'}
-        </small>
-        <p className="muted">
-          {calendar.lastFailure
-            ? 'Could not update. Saved events remain available.'
-            : calendar.lastSyncedAt
-              ? `Last updated ${new Date(calendar.lastSyncedAt).toLocaleString()}`
-              : enabled
-                ? 'Waiting for the first sync.'
-                : 'Disabled until you choose to show it.'}
-        </p>
-        <button className="outline-button" disabled={!changed} type="submit">
-          Save calendar
-        </button>
-      </fieldset>
-    </form>
   );
 }

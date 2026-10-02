@@ -73,6 +73,18 @@ export function googleClient(env: GoogleEnv) {
         token = await accessToken(env);
         continue;
       }
+      if (response.status === 401) {
+        await env.DB.prepare(
+          "UPDATE google_connections SET requires_reconnect=1,last_connection_error='authorization' WHERE household_id=? AND (requires_reconnect!=1 OR last_connection_error IS NOT 'authorization')",
+        )
+          .bind(HOUSEHOLD_ID)
+          .run();
+        throw new ApiError(
+          502,
+          'Google sign-in needs attention. Reconnect Google Calendar.',
+          'google_token',
+        );
+      }
       if (response.status === 410) throw new Gone();
       if (!response.ok)
         throw new ApiError(
@@ -104,6 +116,7 @@ export function safeCalendar(c: StoredCalendar) {
     privacyMode: c.privacy_mode,
     memberId: c.member_id ?? null,
     lastSyncedAt: c.last_synced_at,
+    lastFailure: c.last_sync_error,
   };
 }
 export async function discover(env: GoogleEnv) {

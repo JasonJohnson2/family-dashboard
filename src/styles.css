@@ -3668,3 +3668,25 @@ button:disabled {
   display: grid;
   gap: 8px;
 }
+
+.mobile-settings {
+  display: none;
+}
+@media (max-width: 600px) {
+  .sidebar .mobile-settings.more-open {
+    display: flex;
+    bottom: calc(142px + env(safe-area-inset-bottom));
+    left: 14px;
+  }
+}
+
+.calendar-connections .outline-button,
+.calendar-connections .primary {
+  min-height: 44px;
+}
+
+@media (min-width: 600px) and (max-width: 999px) {
+  .sidebar .mobile-settings {
+    display: flex;
+  }
+}

@@ -6,6 +6,7 @@ import { decryptToken, encryptToken, encryptionKey, hash, randomToken } from './
 import { commit, connection, disconnectStatements, withLease } from './storage';
 import type { GoogleEnv } from './types';
 import { providerFetch } from '../calendar/requestBudget';
+import { syncFailure } from './status';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
@@ -31,12 +32,7 @@ export function appOrigin(env: GoogleEnv) {
   return url.origin;
 }
 export async function configured(env: GoogleEnv) {
-  if (
-    !env.GOOGLE_CLIENT_ID ||
-    !env.GOOGLE_CLIENT_SECRET ||
-    !env.GOOGLE_ADMIN_KEY ||
-    env.GOOGLE_ADMIN_KEY.length < 32
-  )
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)
     throw new ApiError(
       503,
       'Google Calendar is not configured. Set the documented Worker secrets.',
@@ -89,23 +85,52 @@ export async function tokenRequest(env: GoogleEnv, params: Record<string, string
       },
       env.calendarHttpBudget,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(502, 'Google could not be reached. Try again.', 'google_unavailable');
   }
-  if (!response.ok)
+  if (!response.ok) {
+    let reason = '';
+    try {
+      const body = (await response.json()) as { error?: unknown };
+      if (typeof body.error === 'string') reason = body.error;
+    } catch {
+      /* No provider body or description is returned or logged. */
+    }
+    if ([400, 401].includes(response.status) && reason === 'invalid_grant')
+      throw new ApiError(
+        502,
+        'Google sign-in expired or was revoked. Reconnect Google Calendar.',
+        'google_token',
+      );
+    if (
+      [400, 401].includes(response.status) &&
+      ['invalid_client', 'unauthorized_client'].includes(reason)
+    )
+      throw new ApiError(
+        503,
+        'Google Calendar configuration needs attention from the household owner.',
+        'google_configuration',
+      );
     throw new ApiError(
       502,
-      'Google authorization failed. Reconnect if access was revoked or expired.',
-      'google_token',
+      'Google is temporarily unavailable or rejected this request. Retry synchronization.',
+      'google_unavailable',
     );
-  try {
-    const result = tokenSchema.parse(await response.json());
-    if (result.scope && !SCOPES.every((s) => result.scope!.split(' ').includes(s)))
-      throw new Error();
-    return result;
-  } catch {
-    throw new ApiError(502, 'Google did not grant the required read-only access.', 'google_scopes');
   }
+  let result: z.infer<typeof tokenSchema>;
+  try {
+    result = tokenSchema.parse(await response.json());
+  } catch {
+    throw new ApiError(
+      502,
+      'Google returned an invalid token response. Retry later.',
+      'google_unavailable',
+    );
+  }
+  if (result.scope && !SCOPES.every((scope) => result.scope!.split(' ').includes(scope)))
+    throw new ApiError(502, 'Google did not grant the required read-only access.', 'google_scopes');
+  return result;
 }
 function cookieName(env: GoogleEnv) {
   return appOrigin(env).startsWith('https:') ? '__Host-google_oauth' : 'google_oauth';
@@ -113,17 +138,20 @@ function cookieName(env: GoogleEnv) {
 export function stateCookie(env: GoogleEnv, value: string, maxAge = 600) {
   return `${cookieName(env)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${appOrigin(env).startsWith('https:') ? '; Secure' : ''}`;
 }
-export async function connect(request: Request, env: GoogleEnv) {
+export async function connect(request: Request, env: GoogleEnv, reconnect = false) {
   const householdSession = await requireHousehold(request, env);
   await configured(env);
   if (new URL(request.url).origin !== appOrigin(env))
     throw new ApiError(403, 'Open the configured dashboard origin to connect.', 'google_origin');
-  if (await connection(env.DB))
+  const stored = await connection(env.DB);
+  if (stored && !reconnect)
     throw new ApiError(
       409,
       'Disconnect the current Google account before connecting another.',
       'google_connected',
     );
+  if (reconnect && !stored)
+    throw new ApiError(409, 'Connect Google Calendar first.', 'google_not_connected');
   const state = randomToken(),
     browser = randomToken(),
     verifier = randomToken();
@@ -138,7 +166,7 @@ export async function connect(request: Request, env: GoogleEnv) {
       HOUSEHOLD_ID,
     ),
     env.DB.prepare(
-      'INSERT INTO google_oauth_states (state_hash,household_id,browser_hash,verifier,expires_at,household_session_id) VALUES (?,?,?,?,?,?)',
+      'INSERT INTO google_oauth_states (state_hash,household_id,browser_hash,verifier,expires_at,household_session_id,connection_id) VALUES (?,?,?,?,?,?,?)',
     ).bind(
       await hash(state),
       HOUSEHOLD_ID,
@@ -146,6 +174,7 @@ export async function connect(request: Request, env: GoogleEnv) {
       verifier,
       Date.now() + 600000,
       householdSession.id,
+      stored?.id ?? null,
     ),
   ]);
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -160,6 +189,7 @@ export async function connect(request: Request, env: GoogleEnv) {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   }).toString();
+  if (stored?.account_email) url.searchParams.set('login_hint', stored.account_email);
   return Response.json(
     { authorizationUrl: url.toString() },
     {
@@ -193,10 +223,10 @@ export async function callback(request: Request, env: GoogleEnv) {
   const row = await env.DB.prepare(
     `DELETE FROM google_oauth_states WHERE state_hash=? AND household_id=? AND browser_hash=? AND expires_at>?
       AND EXISTS (SELECT 1 FROM household_sessions s JOIN household_credentials c ON c.household_id=s.household_id AND c.version=s.credentialVersion
-        WHERE s.household_id=google_oauth_states.household_id AND s.id=google_oauth_states.household_session_id AND s.revokedAt IS NULL AND s.expiresAt>?) RETURNING verifier`,
+        WHERE s.household_id=google_oauth_states.household_id AND s.id=google_oauth_states.household_session_id AND s.revokedAt IS NULL AND s.expiresAt>?) RETURNING verifier,connection_id`,
   )
     .bind(await hash(state), HOUSEHOLD_ID, await hash(browser), Date.now(), Date.now())
-    .first<{ verifier: string }>();
+    .first<{ verifier: string; connection_id: string | null }>();
   if (!row)
     throw new ApiError(
       400,
@@ -217,7 +247,8 @@ export async function callback(request: Request, env: GoogleEnv) {
       'google_code',
     );
   await withLease(env.DB, async (lease) => {
-    if (await connection(env.DB))
+    const stored = await connection(env.DB);
+    if ((row.connection_id && stored?.id !== row.connection_id) || (!row.connection_id && stored))
       throw new ApiError(409, 'A Google account is already connected.', 'google_connected');
     const token = await tokenRequest(env, {
       grant_type: 'authorization_code',
@@ -228,28 +259,80 @@ export async function callback(request: Request, env: GoogleEnv) {
     if (!token.refresh_token)
       throw new ApiError(
         400,
-        'Google did not provide offline access. Remove this app from Google account permissions, then connect again.',
+        'Google did not provide offline access. Try connecting again and grant both read-only calendar permissions.',
         'google_refresh_missing',
       );
-    const id = crypto.randomUUID();
+    const primary = await primaryAccount(env, token.access_token);
+    const knownAccount =
+      stored?.account_id ??
+      (
+        await env.DB.prepare(
+          'SELECT google_id FROM google_calendars WHERE household_id=? AND is_primary=1',
+        )
+          .bind(HOUSEHOLD_ID)
+          .first<{ google_id: string }>()
+      )?.google_id;
+    if (stored && knownAccount && knownAccount !== primary)
+      throw new ApiError(
+        409,
+        'Choose the Google account already connected to this household. To change accounts, disconnect explicitly first.',
+        'google_account_mismatch',
+      );
+    if (
+      stored &&
+      !knownAccount &&
+      (await env.DB.prepare('SELECT 1 FROM google_calendars WHERE household_id=? LIMIT 1')
+        .bind(HOUSEHOLD_ID)
+        .first())
+    )
+      throw new ApiError(
+        409,
+        'The original Google account could not be verified. Existing calendars are unchanged; contact the household owner.',
+        'google_account_unknown',
+      );
+    const id = stored?.id ?? crypto.randomUUID();
     const encrypted = await encryptToken(token.refresh_token, env.GOOGLE_TOKEN_ENCRYPTION_KEY, id);
-    await commit(lease, [
-      env.DB.prepare(
-        'INSERT INTO google_connections (household_id,id,refresh_ciphertext,refresh_iv,encryption_version,scopes) VALUES (?,?,?,?,?,?)',
-      ).bind(
-        HOUSEHOLD_ID,
-        id,
-        encrypted.ciphertext,
-        encrypted.iv,
-        encrypted.version,
-        token.scope ?? SCOPES.join(' '),
-      ),
-    ]);
+    await commit(
+      lease,
+      stored
+        ? [
+            env.DB.prepare(
+              'UPDATE google_connections SET refresh_ciphertext=?,refresh_iv=?,encryption_version=?,scopes=?,account_id=?,account_email=?,requires_reconnect=0,last_connection_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE household_id=? AND id=?',
+            ).bind(
+              encrypted.ciphertext,
+              encrypted.iv,
+              encrypted.version,
+              token.scope ?? SCOPES.join(' '),
+              primary,
+              accountEmail(primary),
+              HOUSEHOLD_ID,
+              id,
+            ),
+            env.DB.prepare(
+              "UPDATE google_calendars SET last_sync_error=CASE WHEN last_sync_error='authorization' THEN NULL ELSE last_sync_error END,last_attempt_at=NULL WHERE household_id=? AND (last_attempt_at IS NOT NULL OR last_sync_error='authorization')",
+            ).bind(HOUSEHOLD_ID),
+          ]
+        : [
+            env.DB.prepare(
+              'INSERT INTO google_connections (household_id,id,refresh_ciphertext,refresh_iv,encryption_version,scopes,account_id,account_email) VALUES (?,?,?,?,?,?,?,?)',
+            ).bind(
+              HOUSEHOLD_ID,
+              id,
+              encrypted.ciphertext,
+              encrypted.iv,
+              encrypted.version,
+              token.scope ?? SCOPES.join(' '),
+              primary,
+              accountEmail(primary),
+            ),
+          ],
+      false,
+    );
   });
   return new Response(null, {
     status: 303,
     headers: {
-      Location: `${appOrigin(env)}/#calendar`,
+      Location: `${appOrigin(env)}/#connections?google=${row.connection_id ? 'reconnected' : 'connected'}`,
       'Set-Cookie': stateCookie(env, '', 0),
       'Cache-Control': 'no-store',
       'Referrer-Policy': 'no-referrer',
@@ -257,19 +340,72 @@ export async function callback(request: Request, env: GoogleEnv) {
   });
 }
 export async function accessToken(env: GoogleEnv) {
-  await configured(env);
   const stored = await connection(env.DB);
   if (!stored) throw new ApiError(409, 'Connect Google before syncing.', 'google_not_connected');
-  const refresh = await decryptToken(
-    stored.refresh_ciphertext,
-    stored.refresh_iv,
-    stored.encryption_version,
-    env.GOOGLE_TOKEN_ENCRYPTION_KEY,
-    stored.id,
-  );
-  // Access tokens live only for this request. Each operation starts with a fresh token.
-  return (await tokenRequest(env, { grant_type: 'refresh_token', refresh_token: refresh }))
-    .access_token;
+  try {
+    await configured(env);
+    const refresh = await decryptToken(
+      stored.refresh_ciphertext,
+      stored.refresh_iv,
+      stored.encryption_version,
+      env.GOOGLE_TOKEN_ENCRYPTION_KEY,
+      stored.id,
+    );
+    // Access tokens live only for this request. Each operation starts with a fresh token.
+    const token = (await tokenRequest(env, { grant_type: 'refresh_token', refresh_token: refresh }))
+      .access_token;
+    await env.DB.prepare(
+      'UPDATE google_connections SET requires_reconnect=0,last_connection_error=NULL WHERE household_id=? AND id=? AND refresh_ciphertext=? AND (requires_reconnect!=0 OR last_connection_error IS NOT NULL)',
+    )
+      .bind(HOUSEHOLD_ID, stored.id, stored.refresh_ciphertext)
+      .run();
+    return token;
+  } catch (error) {
+    const failure = syncFailure(error);
+    await env.DB.prepare(
+      'UPDATE google_connections SET requires_reconnect=?,last_connection_error=? WHERE household_id=? AND id=? AND refresh_ciphertext=? AND (requires_reconnect!=? OR last_connection_error IS NOT ?)',
+    )
+      .bind(
+        Number(failure === 'authorization'),
+        failure,
+        HOUSEHOLD_ID,
+        stored.id,
+        stored.refresh_ciphertext,
+        Number(failure === 'authorization'),
+        failure,
+      )
+      .run();
+    throw error;
+  }
+}
+const accountEmail = (id: string) => (/^[^\s@]+@[^\s@]+$/.test(id) ? id : null);
+async function primaryAccount(env: GoogleEnv, access: string) {
+  const response = await providerFetch(
+    'https://www.googleapis.com/calendar/v3/users/me/calendarList/primary?fields=id',
+    { headers: { Authorization: `Bearer ${access}` }, signal: AbortSignal.timeout(15000) },
+    env.calendarHttpBudget,
+  ).catch(() => {
+    throw new ApiError(
+      502,
+      'Google account could not be verified. Retry connection.',
+      'google_unavailable',
+    );
+  });
+  if (!response.ok)
+    throw new ApiError(
+      502,
+      'Google account could not be verified. Existing settings are unchanged.',
+      'google_unavailable',
+    );
+  try {
+    return z.object({ id: z.string().min(1).max(500) }).parse(await response.json()).id;
+  } catch {
+    throw new ApiError(
+      502,
+      'Google returned an invalid account response. Existing settings are unchanged.',
+      'google_response',
+    );
+  }
 }
 export async function disconnect(env: GoogleEnv) {
   await withLease(env.DB, async (lease) => commit(lease, await disconnectStatements(env.DB)));

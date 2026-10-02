@@ -39,6 +39,36 @@ const dummy = {
 } as Calendar;
 describe('CalDAV parsing, recurrence and credential isolation', () => {
   afterEach(() => vi.unstubAllGlobals());
+  it('reads individual calendar resources with the shared budget, safe URLs and complete ETag-bearing responses', async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => new Response(sample(), { headers: { ETag: 'one' } }));
+    vi.stubGlobal('fetch', fetch);
+    const budget = { remaining: 1 },
+      get = client(ACCOUNT, PASSWORD, budget);
+    expect(await get.resource(URL + 'a.ics', URL)).toEqual({ etag: 'one', ics: sample() });
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      method: 'GET',
+      headers: { Accept: 'text/calendar' },
+    });
+    expect(fetch.mock.calls[0][1].body).toBeUndefined();
+    expect(new Headers(fetch.mock.calls[0][1].headers).has('Depth')).toBe(false);
+    await expect(get.resource(URL + 'b.ics', URL)).rejects.toMatchObject({
+      code: 'calendar_limit',
+    });
+    await expect(
+      client(ACCOUNT, PASSWORD).resource('https://evil.test/a.ics', URL),
+    ).rejects.toThrow('unsupported');
+    for (const response of [
+      new Response(sample()),
+      new Response(sample(), { status: 206, headers: { ETag: 'one' } }),
+    ]) {
+      fetch.mockResolvedValueOnce(response);
+      await expect(client(ACCOUNT, PASSWORD).resource(URL + 'a.ics', URL)).rejects.toMatchObject({
+        code: 'icloud_response',
+      });
+    }
+  });
   it('distinguishes timeouts from transport failures without exposing exception text', async () => {
     for (const [error, code] of [
       [new DOMException(PASSWORD, 'TimeoutError'), 'icloud_timeout'],
@@ -820,7 +850,10 @@ describe('iCloud API on real D1', () => {
       transportError = false;
     fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
       const body = String(init.body);
-      if (body.includes('<c:expand') || (failRaw && body.includes('calendar-multiget'))) {
+      if (
+        body.includes('<c:expand') ||
+        (failRaw && (body.includes('calendar-multiget') || init.method === 'GET'))
+      ) {
         if (transportError) throw new TypeError('Private upstream detail ' + PASSWORD);
         throw new DOMException('Private upstream detail ' + PASSWORD, 'TimeoutError');
       }
@@ -845,7 +878,7 @@ describe('iCloud API on real D1', () => {
     const result = await refresh();
     expect(result).toMatchObject({
       outcome: 'unavailable',
-      diagnostic: { code: 'icloud_timeout', phase: 'event-download' },
+      diagnostic: { code: 'icloud_timeout', phase: 'event-read' },
     });
     expect(JSON.stringify(result)).not.toContain(PASSWORD);
     expect((await primary()).sync_token).toBe(stored.sync_token);
@@ -907,6 +940,52 @@ describe('iCloud API on real D1', () => {
       diagnostic: { code: 'calendar_limit' },
     });
     expect((await primary()).sync_token).toBe(stored.sync_token);
+    expect((await readState(db)).events).toEqual(before.events);
+    expect((await readState(db)).household.revision).toBe(before.household.revision);
+  }, 60000);
+  it('falls back to individual event reads when even small multiget requests time out and preserves every cached projection on a missing resource', async () => {
+    await connect();
+    await enable('title', 'kelly');
+    records.set('b.ics', {
+      etag: 'one',
+      ics: sample('Second event').replace('UID:event-one', 'UID:second'),
+    });
+    const normal = fetchMock.getMockImplementation()!;
+    let missing = false;
+    fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
+      if (init.method === 'GET') {
+        const name = new globalThis.URL(href).pathname.split('/').at(-1)!;
+        if (missing && name === 'b.ics')
+          return new Response('Private provider details', { status: 404 });
+        const record = records.get(name)!;
+        return new Response(record.ics, { headers: { ETag: record.etag } });
+      }
+      if (String(init.body).includes('calendar-multiget'))
+        throw new DOMException(PASSWORD, 'TimeoutError');
+      return normal(href, init);
+    });
+    env.calendarHttpBudget = { remaining: 40 };
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    const before = await readState(db),
+      stored = await primary();
+    const imported = before.events.filter((e) => e.sourceId === stored.source_id);
+    expect(imported).toHaveLength(2);
+    expect(imported.every((e) => e.memberIds[0] === 'kelly' && !e.notes && !e.location)).toBe(true);
+    expect(fetchMock.mock.calls.filter((c) => c[1].method === 'GET')).toHaveLength(2);
+    missing = true;
+    records.set('a.ics', { etag: 'two', ics: sample('Changed event') });
+    changes = new Map([
+      ['a.ics', 'two'],
+      ['b.ics', 'two'],
+    ]);
+    token++;
+    env.calendarHttpBudget = { remaining: 40 };
+    expect(await refresh()).toMatchObject({
+      outcome: 'unavailable',
+      diagnostic: { phase: 'event-read', httpStatus: 404 },
+    });
+    expect((await primary()).sync_token).toBe(stored.sync_token);
+    expect((await calendars(db)).some((c) => c.source_id === stored.source_id)).toBe(true);
     expect((await readState(db)).events).toEqual(before.events);
     expect((await readState(db)).household.revision).toBe(before.household.revision);
   }, 60000);

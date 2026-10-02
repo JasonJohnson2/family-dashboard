@@ -374,10 +374,12 @@ async function importResources(
   zone: string,
   from: string,
   to: string,
+  onPhase: (phase: SyncPhase) => void,
 ) {
   const data = new Map<string, { etag: string; events: CalendarEvent[] }>();
   let expand = true;
   let batchSize = 50;
+  let individual = false;
   const transportFailure = (e: unknown) =>
     e instanceof ApiError && ['icloud_timeout', 'icloud_network'].includes(e.code);
   for (let i = 0; i < hrefs.length;) {
@@ -385,6 +387,15 @@ async function importResources(
       body = (expand: boolean) =>
         `<c:calendar-multiget xmlns:d="DAV:" xmlns:c="${CAL}"><d:prop><d:getetag/><c:calendar-data>${expand ? `<c:expand start="${stamp(from)}" end="${stamp(to)}"/>` : ''}</c:calendar-data></d:prop>${chunk.map((h) => `<d:href>${escapeXml(new URL(h).pathname)}</d:href>`).join('')}</c:calendar-multiget>`;
     let result;
+    if (individual) {
+      onPhase('event-read');
+      for (const href of chunk) {
+        const { etag, ics } = await get.resource(href, c.url);
+        data.set(href, { etag, events: await normalizeIcs(ics, href, c, zone, from, to) });
+      }
+      i += chunk.length;
+      continue;
+    }
     try {
       // RFC 4791 section 7.9: multiget should omit Depth.
       result = await get(c.url, 'REPORT', body(expand), null);
@@ -394,8 +405,9 @@ async function importResources(
         ((e instanceof DavError && (e.unsupportedExpansion || [400, 501].includes(e.davStatus))) ||
           transportFailure(e));
       if (!retryRaw) {
-        if (!expand && transportFailure(e) && chunk.length > 1) {
-          batchSize = Math.max(1, Math.floor(chunk.length / 5));
+        if (!expand && transportFailure(e)) {
+          if (chunk.length > 10) batchSize = 10;
+          else individual = true;
           continue;
         }
         throw e;
@@ -407,10 +419,11 @@ async function importResources(
       try {
         result = await get(c.url, 'REPORT', body(false), null);
       } catch (rawError) {
-        if (!transportFailure(rawError) || chunk.length <= 1) throw rawError;
+        if (!transportFailure(rawError)) throw rawError;
         // Retry the same resources in smaller batches; the shared client still
         // enforces the original 40-request and 90-second bounds.
-        batchSize = Math.max(1, Math.floor(chunk.length / 5));
+        if (chunk.length > 10) batchSize = 10;
+        else individual = true;
         continue;
       }
     }
@@ -528,7 +541,9 @@ export async function sync(env: Env, manual = false) {
             (href) => reset || old.find((r) => r.href === href)?.etag !== found.get(href),
           );
           phase = 'event-download';
-          const data = await importResources(get, calendar, changed, zone, from, to),
+          const data = await importResources(get, calendar, changed, zone, from, to, (step) => {
+              phase = step;
+            }),
             imported = [...data.values()].flatMap((d) => d.events);
           if (imported.length > 10000)
             throw new ApiError(
@@ -589,7 +604,7 @@ export async function sync(env: Env, manual = false) {
           await commit(lease, statements, delta.visibleChanged);
           synced++;
         } catch (e) {
-          if (e instanceof DavError && e.davStatus === 404) {
+          if (e instanceof DavError && e.davStatus === 404 && !e.resourceRequest) {
             await commit(lease, removeCalendar(env.DB, calendar));
             // This is a successful reconciliation: notify the client to reload
             // even when no other calendar imported new occurrences.

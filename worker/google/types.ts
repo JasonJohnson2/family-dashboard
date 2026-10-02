@@ -16,6 +16,8 @@ export interface Connection {
   refresh_iv: string;
   encryption_version: number;
   scopes: string;
+  requires_reconnect: number;
+  last_connection_error: 'authorization' | 'configuration' | 'unavailable' | null;
 }
 export interface StoredCalendar {
   google_id: string;

@@ -10,7 +10,8 @@ import {
   disconnect,
   stateCookie,
 } from './oauth';
-import { connection } from './storage';
+import { calendars, connection } from './storage';
+import { safeCalendar } from './calendar';
 import { automaticSync } from './automatic';
 import { syncStatus } from './status';
 import type { GoogleEnv } from './types';
@@ -67,11 +68,14 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         accountId: stored?.account_id ?? null,
         email: stored?.account_email ?? null,
         scopes: stored?.scopes.split(' ') ?? [],
+        calendars: (await calendars(env.DB)).map(safeCalendar),
         sync: await syncStatus(env.DB),
       });
     }
     if (path === '/api/google/connect' && request.method === 'GET')
       return await connect(request, env);
+    if (path === '/api/google/reconnect' && request.method === 'GET')
+      return await connect(request, env, true);
     if (path === '/api/google/calendars' && request.method === 'GET')
       return json({ calendars: await discover(env) });
     if (path === '/api/google/calendars' && request.method === 'PATCH') {
@@ -101,7 +105,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
       return json({ connected: false });
     }
     if (
-      ['connect', 'status', 'calendars', 'sync', 'disconnect'].some(
+      ['connect', 'reconnect', 'status', 'calendars', 'sync', 'disconnect'].some(
         (p) => path === `/api/google/${p}`,
       )
     )
@@ -124,6 +128,32 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         response.headers.set('Set-Cookie', stateCookie(env, '', 0));
       } catch {
         /* Invalid config must still return a safe error. */
+      }
+      if (request.headers.get('Accept')?.includes('text/html')) {
+        const allowed = [
+          'google_state',
+          'google_denied',
+          'google_code',
+          'google_refresh_missing',
+          'google_scopes',
+          'google_configuration',
+          'google_account_mismatch',
+          'google_account_unknown',
+          'google_connected',
+        ];
+        const code =
+          error instanceof ApiError && allowed.includes(error.code)
+            ? error.code
+            : 'google_unavailable';
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: `${new URL(request.url).origin}/#connections?google_error=${code}`,
+            'Set-Cookie': response.headers.get('Set-Cookie') ?? '',
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+          },
+        });
       }
     }
     return response;

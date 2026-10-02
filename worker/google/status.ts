@@ -25,7 +25,8 @@ export function isDue(calendar: StoredCalendar, manual = false, now = Date.now()
   );
 }
 export async function syncStatus(db: D1Database) {
-  const connected = !!(await connection(db));
+  const stored = await connection(db),
+    connected = !!stored;
   const enabled = (await calendars(db)).filter((c) => c.enabled);
   const lock = await db
     .prepare('SELECT expires_at FROM google_operation_locks WHERE household_id=?')
@@ -44,7 +45,9 @@ export async function syncStatus(db: D1Database) {
         : null,
     stale: enabled.some((c) => isStale(c)),
     syncing: !!lock && lock.expires_at > Date.now(),
-    needsAttention: failed.length > 0,
-    lastFailure: failed[0]?.last_sync_error ?? null,
+    needsAttention:
+      !!stored?.last_connection_error || !!stored?.requires_reconnect || failed.length > 0,
+    requiresReconnect: !!stored?.requires_reconnect,
+    lastFailure: stored?.last_connection_error ?? failed[0]?.last_sync_error ?? null,
   };
 }

@@ -176,6 +176,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
           expires_in: 3600,
           scope: SCOPES.join(' '),
         });
+      if (url.pathname.endsWith('calendarList/primary'))
+        return Response.json({ id: 'primary@example.test' });
       if (url.pathname.endsWith('calendarList'))
         return Response.json({
           items: [
@@ -341,8 +343,223 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     return () => rows;
   }
 
+  async function reconnectStart() {
+    const response = await call('reconnect');
+    expect(response.status).toBe(200);
+    return {
+      url: new URL(((await response.json()) as { authorizationUrl: string }).authorizationUrl),
+      cookie: response.headers.get('Set-Cookie')!.split(';')[0],
+    };
+  }
+  it('reauthorizes the same connection without resetting any calendar settings, projections or tokens', async () => {
+    const source = await selected('title');
+    await members();
+    await call('calendars', 'PATCH', {
+      sourceId: source,
+      enabled: true,
+      privacyMode: 'title',
+      memberId: 'robin',
+    });
+    const before = await synced();
+    const saved = await calendars(db);
+    const stored = (await connection(db))!;
+    await db
+      .prepare(
+        "UPDATE google_connections SET requires_reconnect=1,last_connection_error='authorization'",
+      )
+      .run();
+    const start = await reconnectStart();
+    expect(start.url.searchParams.get('scope')).toBe(SCOPES.join(' '));
+    expect(start.url.searchParams.get('login_hint')).toBe('primary@example.test');
+    const normal = google;
+    google = (url, init) =>
+      url.hostname === 'oauth2.googleapis.com'
+        ? Response.json({
+            access_token: ACCESS,
+            refresh_token: 'replacement-fixture',
+            expires_in: 3600,
+            scope: SCOPES.join(' '),
+          })
+        : normal(url, init);
+    // The OAuth callback uses state/cookie/session binding, never an operator header.
+    const response = await rawWorker.fetch(
+      new Request(
+        `${ORIGIN}/api/google/callback?state=${start.url.searchParams.get('state')}&code=test`,
+        { headers: { Cookie: start.cookie, Accept: 'text/html' } },
+      ),
+      env,
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get('Location')).toBe(`${ORIGIN}/#connections?google=reconnected`);
+    const next = (await connection(db))!;
+    expect(next.id).toBe(stored.id);
+    expect(next.requires_reconnect).toBe(0);
+    expect(await decryptToken(next.refresh_ciphertext, next.refresh_iv, 1, KEY, next.id)).toBe(
+      'replacement-fixture',
+    );
+    const updated = await calendars(db);
+    expect(updated.map((c) => ({ ...c, last_attempt_at: null }))).toEqual(
+      saved.map((c) => ({ ...c, last_attempt_at: null })),
+    );
+    expect(await readState(db)).toEqual(before);
+    expect(requests.filter((r) => r.url.pathname.endsWith('/events')).length).toBe(1);
+    expect((await finish(start)).status).toBe(400);
+  });
+  it('rejects wrong-account reconnect and browser errors return safely to settings with the cache intact', async () => {
+    await selected();
+    const before = await synced();
+    const stored = await connection(db);
+    const normal = google;
+    const start = await reconnectStart();
+    google = (url, init) =>
+      url.pathname.endsWith('/primary')
+        ? Response.json({ id: 'other@example.test' })
+        : normal(url, init);
+    const response = await call(
+      `callback?state=${start.url.searchParams.get('state')}&code=private-code`,
+      'GET',
+      undefined,
+      { Cookie: start.cookie, Accept: 'text/html' },
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get('Location')).toBe(
+      `${ORIGIN}/#connections?google_error=google_account_mismatch`,
+    );
+    expect(response.headers.get('Set-Cookie')).toContain('Max-Age=0');
+    expect(await connection(db)).toEqual(stored);
+    expect(await readState(db)).toEqual(before);
+    expect(response.headers.get('Location')).not.toContain('private-code');
+  });
+  it('rejects reconnect after disconnect and validates the initiating browser cookie', async () => {
+    await selected();
+    const stored = await connection(db);
+    const start = await reconnectStart();
+    const wrong = await call(
+      `callback?state=${start.url.searchParams.get('state')}&code=test`,
+      'GET',
+      undefined,
+      { Cookie: '__Host-google_oauth=wrong' },
+    );
+    expect(wrong.status).toBe(400);
+    expect(await connection(db)).toEqual(stored);
+    await call('disconnect', 'POST', {});
+    expect((await finish(start)).status).toBe(400);
+    expect(await connection(db)).toBeNull();
+    expect((await call('reconnect')).status).toBe(409);
+    expect((await call('reconnect', 'GET', undefined, { Authorization: '' })).status).toBe(401);
+  });
+  it.each([
+    [400, 'invalid_grant', 'authorization', true],
+    [401, 'invalid_client', 'configuration', false],
+    [503, 'invalid_grant', 'unavailable', false],
+    [429, 'rate_limit', 'unavailable', false],
+    [400, 'unknown', 'unavailable', false],
+  ] as const)(
+    'classifies token HTTP %s / %s without leaking provider data or losing projections',
+    async (http, error, category, reconnect) => {
+      await selected();
+      const before = await synced();
+      google = () => Response.json({ error, error_description: REFRESH }, { status: http });
+      await call('sync', 'POST', {});
+      const status = await call('status');
+      const result = (await status.json()) as { sync: unknown };
+      expect(result.sync).toMatchObject({
+        lastFailure: category,
+        requiresReconnect: reconnect,
+        needsAttention: true,
+      });
+      expect(JSON.stringify(result)).not.toContain(REFRESH);
+      expect(await readState(db)).toEqual(before);
+    },
+  );
+  it('marks repeated API 401 as reconnect required but treats API 503 and malformed tokens as temporary', async () => {
+    await selected();
+    const before = await synced();
+    const normal = google;
+    google = (url, init) =>
+      url.pathname.endsWith('/events') ? new Response(null, { status: 401 }) : normal(url, init);
+    await call('sync', 'POST', {});
+    expect((await connection(db))?.requires_reconnect).toBe(1);
+    google = (url, init) =>
+      url.pathname.endsWith('/events') ? new Response(null, { status: 503 }) : normal(url, init);
+    await call('sync', 'POST', {});
+    expect((await connection(db))?.requires_reconnect).toBe(0);
+    google = () => new Response('not-json');
+    await call('sync', 'POST', {});
+    expect((await connection(db))?.last_connection_error).toBe('unavailable');
+    expect((await connection(db))?.requires_reconnect).toBe(0);
+    expect(await readState(db)).toEqual(before);
+  });
+  it('adds recovery metadata to populated legacy D1 without changing credentials, calendar data or ambiguous old warnings', async () => {
+    await selected('full');
+    await synced();
+    await db.prepare("UPDATE google_calendars SET last_sync_error='authorization'").run();
+    const stored = (await connection(db))!;
+    await runtime.dispose();
+    runtime = createDatabase();
+    db = (await runtime.getD1Database('DB')) as unknown as D1Database;
+    env.DB = db;
+    await migrate(db, '0008_icloud_calendar.sql');
+    const encrypted = await encryptToken(REFRESH, KEY, 'legacy');
+    await db.batch([
+      db
+        .prepare(
+          'INSERT INTO google_connections(household_id,id,refresh_ciphertext,refresh_iv,encryption_version,scopes,account_id) VALUES (?,?,?,?,?,?,?)',
+        )
+        .bind(
+          'home',
+          'legacy',
+          encrypted.ciphertext,
+          encrypted.iv,
+          1,
+          stored.scopes,
+          stored.account_id,
+        ),
+      db.prepare(
+        "INSERT INTO calendar_sources VALUES ('home','legacy-source','Saved','google','#123456')",
+      ),
+      db.prepare(
+        "INSERT INTO google_calendars(household_id,google_id,source_id,name,color,enabled,privacy_mode,sync_token,last_sync_error) VALUES ('home','primary@example.test','legacy-source','Saved','#123456',1,'full','existing-token','authorization')",
+      ),
+      db.prepare(
+        "INSERT INTO events(household_id,id,sourceId,title,date,allDay,timeZone,recurrence) VALUES ('home','legacy-event','legacy-source','Saved event','2026-09-21',1,'UTC','{\"frequency\":\"none\"}')",
+      ),
+    ]);
+    const before = await readState(db),
+      beforeConnection = await connection(db),
+      beforeCalendars = await calendars(db);
+    await applyMigration(db, '0009_google_reconnect.sql');
+    await testSession(db);
+    expect(await connection(db)).toEqual({
+      ...beforeConnection,
+      requires_reconnect: 0,
+      last_connection_error: null,
+    });
+    expect(await calendars(db)).toEqual(beforeCalendars);
+    expect(await readState(db)).toEqual(before);
+    const status = (await (await call('status')).json()) as { sync: unknown };
+    expect(status.sync).toMatchObject({
+      needsAttention: true,
+      requiresReconnect: false,
+      lastFailure: 'authorization',
+    });
+    expect(await decryptToken(encrypted.ciphertext, encrypted.iv, 1, KEY, 'legacy')).toBe(REFRESH);
+  });
+  it('settings status reads saved calendar configuration without Google HTTP or D1 writes', async () => {
+    await selected();
+    await synced();
+    requests = [];
+    const written = trackWrites();
+    for (let i = 0; i < 3; i++) {
+      const result = (await (await call('status')).json()) as { calendars: { enabled: boolean }[] };
+      expect(result.calendars[0].enabled).toBe(true);
+    }
+    expect(written()).toBe(0);
+    expect(requests).toHaveLength(0);
+  });
   it('allows household operators to manage Google without exposing the Google admin key', async () => {
     env.REWARDS_OPERATOR_PIN = 'test-only-48269173';
+    env.GOOGLE_ADMIN_KEY = undefined;
     const response = await worker.fetch(
       new Request(`${ORIGIN}/api/rewards/operator`, {
         method: 'POST',
@@ -552,6 +769,9 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     expect(await snapshot()).toEqual(before.state);
     await applyMigration(db, '0005_rewards.sql');
     await applyMigration(db, '0006_household_access.sql');
+    await applyMigration(db, '0007_member_roles.sql');
+    await applyMigration(db, '0008_icloud_calendar.sql');
+    await applyMigration(db, '0009_google_reconnect.sql');
     await testSession(db);
     requests = [];
     await automatic();
@@ -742,9 +962,13 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       else
         google = (url, init) =>
           failure === 'authorization' || url.pathname.endsWith('/events')
-            ? new Response(`${ADMIN} ${KEY} ${REFRESH} ${ACCESS} private payload`, {
-                status: failure === 'authorization' ? 400 : 503,
-              })
+            ? Response.json(
+                {
+                  error: failure === 'authorization' ? 'invalid_grant' : 'unavailable',
+                  error_description: `${ADMIN} ${KEY} ${REFRESH} ${ACCESS} private payload`,
+                },
+                { status: failure === 'authorization' ? 400 : 503 },
+              )
             : normal(url, init);
       requests = [];
       const result = await automatic();
@@ -970,11 +1194,18 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
         )
         .bind(await eventId(source, 'old-home'), source),
     ]);
-    const before = await connection(db);
+    const before = {
+      ...(await connection(db)),
+      requires_reconnect: 0,
+      last_connection_error: null,
+    };
     await applyMigration(db, '0003_google_calendar_members.sql');
     await applyMigration(db, '0004_google_sync_status.sql');
     await applyMigration(db, '0005_rewards.sql');
     await applyMigration(db, '0006_household_access.sql');
+    await applyMigration(db, '0007_member_roles.sql');
+    await applyMigration(db, '0008_icloud_calendar.sql');
+    await applyMigration(db, '0009_google_reconnect.sql');
     await testSession(db);
     expect(await connection(db)).toEqual(before);
     expect((await calendars(db))[0]).toMatchObject({
@@ -1031,7 +1262,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     ).toBe(400);
     const response = await finish(start);
     expect(response.status).toBe(303);
-    expect(response.headers.get('Location')).toBe(`${ORIGIN}/#calendar`);
+    expect(response.headers.get('Location')).toBe(`${ORIGIN}/#connections?google=connected`);
     expect((await finish(start)).status).toBe(400);
     const stored = await connection(db);
     expect(JSON.stringify(stored)).not.toContain(REFRESH);
@@ -1274,7 +1505,11 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
           String(r.init?.body).includes('grant_type=refresh_token'),
       ).length,
     ).toBeGreaterThanOrEqual(3);
-    google = () => Response.json({ error_description: `${REFRESH} ${ACCESS}` }, { status: 400 });
+    google = () =>
+      Response.json(
+        { error: 'invalid_grant', error_description: `${REFRESH} ${ACCESS}` },
+        { status: 400 },
+      );
     const response = await call('sync', 'POST', {});
     expect(response.status).toBe(502);
     expect(await response.text()).not.toMatch(new RegExp(`${REFRESH}|${ACCESS}`));
