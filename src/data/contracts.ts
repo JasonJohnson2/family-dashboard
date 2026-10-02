@@ -6,6 +6,7 @@ import {
   rewardOperations,
 } from './rewards';
 import { z } from 'zod';
+import { isValidTimeZone } from '../lib/timeZones';
 import type {
   CalendarEvent,
   Chore,
@@ -30,17 +31,7 @@ export const dateSchema = z
   }, 'Use a valid calendar date.');
 const title = z.string().trim().min(1).max(120);
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
-const timeZone = z
-  .string()
-  .max(80)
-  .refine((value) => {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: value });
-      return true;
-    } catch {
-      return false;
-    }
-  });
+const timeZone = z.string().max(80).refine(isValidTimeZone);
 const color = z.string().regex(/^#[a-fA-F0-9]{6}$/);
 const recurrence = z
   .object({

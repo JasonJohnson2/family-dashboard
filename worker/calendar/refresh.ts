@@ -5,6 +5,7 @@ import { automaticSync } from '../google/automatic';
 import { syncStatus } from '../google/status';
 import { sync as icloudSync, status as icloudStatus } from '../icloud/service';
 import { icloudDiagnostic, type SyncDiagnostic } from './diagnostics';
+import { executeCalendarSync } from './execution';
 export async function refreshCalendars(request: Request, env: Env) {
   if (!['GET', 'POST'].includes(request.method))
     throw new ApiError(405, 'Use GET or POST for calendar refresh.');
@@ -19,6 +20,10 @@ export async function refreshCalendars(request: Request, env: Env) {
     if (!input.success) throw new ApiError(400, 'Send an empty object or a manual refresh flag.');
     manual = !!input.data.manual;
   }
+  if (request.method === 'POST') return executeCalendarSync(env, { kind: 'refresh', manual });
+  return refreshCalendarData(env, false);
+}
+export async function refreshCalendarData(env: Env, synchronize: boolean, manual = false) {
   const safe = async (
     fn: () => Promise<{ outcome: string; synced: number; diagnostic?: SyncDiagnostic }>,
     provider: 'google' | 'icloud',
@@ -44,16 +49,15 @@ export async function refreshCalendars(request: Request, env: Env) {
     }
   };
   // Keep providers independent: a failed Apple request never hides Google's safe data.
-  const [google, icloud] =
-    request.method === 'POST'
-      ? await Promise.all([
-          safe(() => automaticSync(env, manual), 'google'),
-          safe(() => icloudSync(env, manual), 'icloud'),
-        ])
-      : [
-          { outcome: 'complete', synced: 0 },
-          { outcome: 'complete', synced: 0 },
-        ];
+  const [google, icloud] = synchronize
+    ? await Promise.all([
+        safe(() => automaticSync(env, manual), 'google'),
+        safe(() => icloudSync(env, manual), 'icloud'),
+      ])
+    : [
+        { outcome: 'complete', synced: 0 },
+        { outcome: 'complete', synced: 0 },
+      ];
   // A late status read must not discard another provider's committed sync.
   const status = async (
     read: () => Promise<{ enabledCalendars: number; needsAttention: boolean }>,

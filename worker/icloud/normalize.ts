@@ -130,7 +130,7 @@ export async function normalizeIcs(
           if (++steps > 20000) throw new Error('Expansion limit');
           // Compare original occurrences only after a two-day timezone/override margin.
           if (occurrence.toString().slice(0, 10) > addDays(to.slice(0, 10), 2)) break;
-          if (excluded.has(key(occurrence, master, 'dtstart'))) continue;
+          if (excluded.size && excluded.has(key(occurrence, master, 'dtstart'))) continue;
           const details = master.getOccurrenceDetails(occurrence);
           await project(details.item, details.startDate, details.endDate, occurrence);
         }

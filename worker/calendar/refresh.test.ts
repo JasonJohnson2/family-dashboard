@@ -3,6 +3,7 @@ import { automaticSync } from '../google/automatic';
 import { syncStatus } from '../google/status';
 import { sync, status } from '../icloud/service';
 import { refreshCalendars } from './refresh';
+import { withTestCalendarExecutor } from '../../scripts/test-calendar-executor';
 
 vi.mock('../google/automatic', () => ({ automaticSync: vi.fn() }));
 vi.mock('../google/status', () => ({ syncStatus: vi.fn() }));
@@ -26,7 +27,7 @@ it.each(['google', 'icloud'] as const)(
     vi.mocked(status).mockResolvedValue(healthy as Awaited<ReturnType<typeof status>>);
     const failure = provider === 'google' ? vi.mocked(syncStatus) : vi.mocked(status);
     failure.mockRejectedValue(new Error('D1 private SQL account token'));
-    const response = await refreshCalendars(request(), env);
+    const response = await refreshCalendars(request(), withTestCalendarExecutor(env));
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -43,8 +44,14 @@ it.each(['google', 'icloud'] as const)(
       status: healthy,
     });
     expect(JSON.stringify(body)).not.toContain('private SQL');
-    expect(automaticSync).toHaveBeenCalledWith(env, true);
-    expect(sync).toHaveBeenCalledWith(env, true);
+    expect(automaticSync).toHaveBeenCalledWith(
+      expect.objectContaining({ DB: env.DB, calendarHttpBudget: { remaining: 40 } }),
+      true,
+    );
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ DB: env.DB, calendarHttpBudget: { remaining: 40 } }),
+      true,
+    );
   },
 );
 

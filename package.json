@@ -53,6 +53,7 @@
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
+    "esbuild": "0.28.1",
     "miniflare": "5.20260918.0-alpha",
     "prettier": "^3.9.8",
     "tsx": "^4.23.13",

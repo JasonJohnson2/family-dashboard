@@ -1,5 +1,6 @@
 import { eventSchema } from '../../src/data/contracts';
 import { addDays } from '../../src/lib/dates';
+import { timeZoneFormatter } from '../../src/lib/timeZones';
 import { ApiError } from '../database';
 import { hash } from './crypto';
 import type { GoogleEvent, StoredCalendar } from './types';
@@ -13,15 +14,7 @@ export function localTime(instant: string, timeZone: string) {
   if (!/T.*(?:Z|[+-]\d\d:\d\d)$/.test(instant) || !Number.isFinite(date.valueOf()))
     throw new ApiError(502, 'Google returned an invalid event time.', 'google_event');
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    })
+    timeZoneFormatter(timeZone)
       .formatToParts(date)
       .map((p) => [p.type, p.value]),
   );

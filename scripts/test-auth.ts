@@ -1,6 +1,7 @@
 // Test fixtures only. Real D1 sessions pass through the production authorization gate.
 import worker from '../worker/index';
 import { digest, randomToken } from '../worker/credential';
+import { withTestCalendarExecutor } from './test-calendar-executor';
 const sessions = new WeakMap<D1Database, Promise<string>>();
 export function testSession(db: D1Database) {
   let pending = sessions.get(db);
@@ -35,6 +36,6 @@ export const authenticatedWorker = {
       'Cookie',
       [await testSession(env.DB), headers.get('Cookie')].filter(Boolean).join('; '),
     );
-    return worker.fetch(new Request(request, { headers }), env);
+    return worker.fetch(new Request(request, { headers }), withTestCalendarExecutor(env));
   },
 };

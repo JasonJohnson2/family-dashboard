@@ -10,6 +10,10 @@
     { "name": "AUTH_RATE_LIMITER", "namespace_id": "1006", "simple": { "limit": 5, "period": 60 } },
   ],
   "triggers": { "crons": [] },
+  "durable_objects": {
+    "bindings": [{ "name": "CALENDAR_SYNC", "class_name": "CalendarSync" }],
+  },
+  "migrations": [{ "tag": "calendar-sync-v1", "new_sqlite_classes": ["CalendarSync"] }],
   "vars": { "GOOGLE_APP_ORIGIN": "https://family-dashboard.jjayson400.workers.dev" },
   "assets": {
     "directory": "./dist",

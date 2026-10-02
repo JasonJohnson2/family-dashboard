@@ -5,6 +5,7 @@ import { readJson } from './http';
 import { googleRoute } from './google/routes';
 import { icloudRoute } from './icloud/routes';
 import { refreshCalendars } from './calendar/refresh';
+export { CalendarSync } from './calendar/executor';
 import { mutationSchema } from '../src/data/contracts';
 import {
   ApiError,

@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { createDatabase, migrate, seed } from './test-database';
 import worker from '../worker/index';
+import { withTestCalendarExecutor } from './test-calendar-executor';
 
 let runtime = createDatabase();
 let db = (await runtime.getD1Database('DB')) as unknown as D1Database;
@@ -51,12 +52,12 @@ const server = createServer(async (req, res) => {
           headers,
           ...(body ? { body } : {}),
         }),
-        {
+        withTestCalendarExecutor({
           DB: db,
           REWARDS_OPERATOR_PIN: 'test-only-48269173',
           HOUSEHOLD_BOOTSTRAP_VERIFIER: testVerifier,
           AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
-        } as Env,
+        } as Env),
       );
       active.add(pending);
       let response: Response;

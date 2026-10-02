@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApiError } from '../database';
 import { readJson } from '../http';
-import { calendarSettings, configureCalendar, discover, sync } from './calendar';
+import { calendarSettings, configureCalendar, discover } from './calendar';
 import {
   authorizeManagement,
   callback,
@@ -12,7 +12,7 @@ import {
 } from './oauth';
 import { calendars, connection } from './storage';
 import { safeCalendar } from './calendar';
-import { automaticSync } from './automatic';
+import { executeCalendarSync } from '../calendar/execution';
 import { syncStatus } from './status';
 import type { GoogleEnv } from './types';
 
@@ -44,10 +44,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         .safeParse(await readJson(request));
       if (!parsed.success)
         throw new ApiError(400, 'Send an empty object or a manual refresh flag.');
-      return json({
-        ...(await automaticSync(env, parsed.data.manual)),
-        status: await syncStatus(env.DB),
-      });
+      return executeCalendarSync(env, { kind: 'google-refresh', manual: !!parsed.data.manual });
     }
     if (path === '/api/google/callback') {
       if (request.method !== 'GET') throw new ApiError(405, 'Use GET for the Google callback.');
@@ -93,7 +90,7 @@ export async function googleRoute(request: Request, env: GoogleEnv) {
         .strict()
         .safeParse(await readJson(request));
       if (!parsed.success) throw new ApiError(400, 'Provide an optional sourceId.');
-      return json({ synced: await sync(env, parsed.data.sourceId) });
+      return executeCalendarSync(env, { kind: 'google-sync', sourceId: parsed.data.sourceId });
     }
     if (path === '/api/google/disconnect' && request.method === 'POST') {
       const parsed = z
