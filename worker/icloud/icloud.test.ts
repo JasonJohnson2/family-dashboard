@@ -860,6 +860,56 @@ describe('iCloud API on real D1', () => {
     );
     expect((await primary()).sync_token).not.toBe(stored.sync_token);
   }, 60000);
+  it('omits multiget Depth and shrinks slow raw batches without partial commits or unbounded retries', async () => {
+    await connect();
+    await enable();
+    records = new Map(
+      Array.from({ length: 51 }, (_, i) => [
+        `event-${i}.ics`,
+        { etag: 'initial', ics: sample().replace('UID:event-one', `UID:event-${i}`) },
+      ]),
+    );
+    const normal = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
+      const body = String(init.body);
+      if (body.includes('calendar-multiget')) {
+        expect(new Headers(init.headers).has('Depth')).toBe(false);
+        if (body.includes('<c:expand') || [...body.matchAll(/<d:href>/g)].length > 10)
+          throw new DOMException('Private upstream detail ' + PASSWORD, 'TimeoutError');
+      }
+      return normal(href, init);
+    });
+    env.calendarHttpBudget = { remaining: 40 };
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    const source = (await primary()).source_id;
+    const before = await readState(db),
+      stored = await primary();
+    expect(before.events.filter((e) => e.sourceId === source)).toHaveLength(51);
+    const downloads = fetchMock.mock.calls.filter((c) =>
+      String(c[1].body).includes('calendar-multiget'),
+    );
+    expect(downloads).toHaveLength(8);
+    expect(
+      downloads.slice(2).every((c) => [...String(c[1].body).matchAll(/<d:href>/g)].length <= 10),
+    ).toBe(true);
+    expect(env.calendarHttpBudget.remaining).toBeGreaterThan(0);
+    // A tight shared budget must terminate rather than commit a partial batch.
+    records.set('event-0.ics', { etag: 'changed', ics: sample('Changed private event') });
+    records.set('event-1.ics', { etag: 'changed', ics: sample('Another changed event') });
+    changes = new Map([
+      ['event-0.ics', 'changed'],
+      ['event-1.ics', 'changed'],
+    ]);
+    token++;
+    env.calendarHttpBudget = { remaining: 2 };
+    expect(await refresh()).toMatchObject({
+      outcome: 'unavailable',
+      diagnostic: { code: 'calendar_limit' },
+    });
+    expect((await primary()).sync_token).toBe(stored.sync_token);
+    expect((await readState(db)).events).toEqual(before.events);
+    expect((await readState(db)).household.revision).toBe(before.household.revision);
+  }, 60000);
   it('preserves calendar configuration on same-account shard moves and renews the bounded window without retroactively importing history', async () => {
     await connect();
     await enable('title', 'kelly');

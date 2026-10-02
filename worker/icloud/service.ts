@@ -377,24 +377,42 @@ async function importResources(
 ) {
   const data = new Map<string, { etag: string; events: CalendarEvent[] }>();
   let expand = true;
-  for (let i = 0; i < hrefs.length; i += 50) {
-    const chunk = hrefs.slice(i, i + 50),
+  let batchSize = 50;
+  const transportFailure = (e: unknown) =>
+    e instanceof ApiError && ['icloud_timeout', 'icloud_network'].includes(e.code);
+  for (let i = 0; i < hrefs.length;) {
+    const chunk = hrefs.slice(i, i + batchSize),
       body = (expand: boolean) =>
         `<c:calendar-multiget xmlns:d="DAV:" xmlns:c="${CAL}"><d:prop><d:getetag/><c:calendar-data>${expand ? `<c:expand start="${stamp(from)}" end="${stamp(to)}"/>` : ''}</c:calendar-data></d:prop>${chunk.map((h) => `<d:href>${escapeXml(new URL(h).pathname)}</d:href>`).join('')}</c:calendar-multiget>`;
     let result;
     try {
-      result = await get(c.url, 'REPORT', body(expand), '1');
+      // RFC 4791 section 7.9: multiget should omit Depth.
+      result = await get(c.url, 'REPORT', body(expand), null);
     } catch (e) {
       const retryRaw =
         expand &&
         ((e instanceof DavError && (e.unsupportedExpansion || [400, 501].includes(e.davStatus))) ||
-          (e instanceof ApiError && ['icloud_timeout', 'icloud_network'].includes(e.code)));
-      if (!retryRaw) throw e;
+          transportFailure(e));
+      if (!retryRaw) {
+        if (!expand && transportFailure(e) && chunk.length > 1) {
+          batchSize = Math.max(1, Math.floor(chunk.length / 5));
+          continue;
+        }
+        throw e;
+      }
       // Failed server-side recurrence expansion gets one bounded raw-data retry.
       // Keep raw mode for the remaining chunks so each batch cannot repeat the
       // same expensive timeout. Normalization and commit remain all-or-nothing.
       expand = false;
-      result = await get(c.url, 'REPORT', body(false), '1');
+      try {
+        result = await get(c.url, 'REPORT', body(false), null);
+      } catch (rawError) {
+        if (!transportFailure(rawError) || chunk.length <= 1) throw rawError;
+        // Retry the same resources in smaller batches; the shared client still
+        // enforces the original 40-request and 90-second bounds.
+        batchSize = Math.max(1, Math.floor(chunk.length / 5));
+        continue;
+      }
     }
     for (const r of responses(result.root)) {
       const href = resourceUrl(r.href, c.url);
@@ -420,6 +438,7 @@ async function importResources(
         'iCloud omitted a requested event. Saved events are unchanged.',
         'icloud_response',
       );
+    i += chunk.length;
   }
   return data;
 }

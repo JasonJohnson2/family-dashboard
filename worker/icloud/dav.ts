@@ -112,7 +112,12 @@ export function client(account: string, password: string, budget?: { remaining: 
   );
   let calls = 0;
   const deadline = Date.now() + 90_000;
-  return async (href: string, method: 'PROPFIND' | 'REPORT', body: string, depth = '0') => {
+  return async (
+    href: string,
+    method: 'PROPFIND' | 'REPORT',
+    body: string,
+    depth: string | null = '0',
+  ) => {
     let url = safeUrl(href);
     for (let redirects = 0; redirects < 4; redirects++) {
       if (++calls > 40 || Date.now() > deadline)
@@ -130,7 +135,7 @@ export function client(account: string, password: string, budget?: { remaining: 
             headers: {
               Authorization: `Basic ${auth}`,
               'Content-Type': 'application/xml; charset=utf-8',
-              Depth: depth,
+              ...(depth === null ? {} : { Depth: depth }),
             },
             body,
             redirect: 'manual',
