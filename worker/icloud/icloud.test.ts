@@ -943,6 +943,63 @@ describe('iCloud API on real D1', () => {
     expect((await readState(db)).events).toEqual(before.events);
     expect((await readState(db)).household.revision).toBe(before.household.revision);
   }, 60000);
+  it.each([400, 405, 501])(
+    'uses single-resource REPORT after direct GET is rejected with HTTP %s, without repeating unsupported GET or partially committing',
+    async (status) => {
+      await connect();
+      await enable('title', 'kelly');
+      records.set('b.ics', {
+        etag: 'one',
+        ics: sample('Second event').replace('UID:event-one', 'UID:second'),
+      });
+      const normal = fetchMock.getMockImplementation()!;
+      let incomplete = false;
+      fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
+        if (init.method === 'GET')
+          return new Response('Private provider detail ' + PASSWORD, { status });
+        const body = String(init.body);
+        if (body.includes('calendar-multiget')) {
+          const count = [...body.matchAll(/<d:href>/g)].length;
+          if (body.includes('<c:expand') || count > 1)
+            throw new DOMException('private', 'TimeoutError');
+          expect(new Headers(init.headers).has('Depth')).toBe(false);
+          if (incomplete && body.includes('b.ics'))
+            return response(multistatus(row(URL + 'b.ics', '<d:getetag>changed</d:getetag>')));
+        }
+        return normal(href, init);
+      });
+      env.calendarHttpBudget = { remaining: 40 };
+      expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+      expect(fetchMock.mock.calls.filter((c) => c[1].method === 'GET')).toHaveLength(1);
+      const saved = await primary(),
+        before = await readState(db);
+      expect(before.events.filter((e) => e.sourceId === saved.source_id)).toHaveLength(2);
+      expect(
+        before.events
+          .filter((e) => e.sourceId === saved.source_id)
+          .every((e) => e.memberIds[0] === 'kelly'),
+      ).toBe(true);
+      records.set('a.ics', { etag: 'changed', ics: sample('Changed first event') });
+      records.set('b.ics', {
+        etag: 'changed',
+        ics: sample('Changed second event').replace('UID:event-one', 'UID:second'),
+      });
+      changes = new Map([
+        ['a.ics', 'changed'],
+        ['b.ics', 'changed'],
+      ]);
+      token++;
+      incomplete = true;
+      env.calendarHttpBudget = { remaining: 40 };
+      expect(await refresh()).toMatchObject({
+        outcome: 'unavailable',
+        diagnostic: { code: 'icloud_response', phase: 'event-read' },
+      });
+      expect(await readState(db)).toEqual(before);
+      expect((await primary()).sync_token).toBe(saved.sync_token);
+    },
+    60000,
+  );
   it('falls back to individual event reads when even small multiget requests time out and preserves every cached projection on a missing resource', async () => {
     await connect();
     await enable('title', 'kelly');

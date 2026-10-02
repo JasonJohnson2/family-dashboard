@@ -380,17 +380,52 @@ async function importResources(
   let expand = true;
   let batchSize = 50;
   let individual = false;
+  let directReads = true;
+  const body = (resources: string[], expand: boolean) =>
+    `<c:calendar-multiget xmlns:d="DAV:" xmlns:c="${CAL}"><d:prop><d:getetag/><c:calendar-data>${expand ? `<c:expand start="${stamp(from)}" end="${stamp(to)}"/>` : ''}</c:calendar-data></d:prop>${resources.map((h) => `<d:href>${escapeXml(new URL(h).pathname)}</d:href>`).join('')}</c:calendar-multiget>`;
+  async function readIndividual(href: string) {
+    if (directReads) {
+      try {
+        return await get.resource(href, c.url);
+      } catch (error) {
+        if (
+          !(error instanceof DavError) ||
+          !error.resourceRequest ||
+          ![400, 405, 501].includes(error.davStatus)
+        )
+          throw error;
+        // Some Apple calendars reject direct GET. Learn this once per invocation,
+        // then use a single-resource REPORT under the same deadline/request budget.
+        directReads = false;
+      }
+    }
+    const result = await get(c.url, 'REPORT', body([href], false), null);
+    const rows = responses(result.root);
+    if (rows.length !== 1 || resourceUrl(rows[0].href, c.url) !== href || rows[0].status !== 200)
+      throw new ApiError(
+        502,
+        'iCloud individual event retrieval was incomplete. Saved events are unchanged.',
+        'icloud_response',
+      );
+    const etag = value(rows[0].props, 'getetag'),
+      ics = value(rows[0].props, 'calendar-data', CAL);
+    if (!etag || !ics)
+      throw new ApiError(
+        502,
+        'iCloud omitted individual event data. Saved events are unchanged.',
+        'icloud_response',
+      );
+    return { etag, ics };
+  }
   const transportFailure = (e: unknown) =>
     e instanceof ApiError && ['icloud_timeout', 'icloud_network'].includes(e.code);
   for (let i = 0; i < hrefs.length;) {
-    const chunk = hrefs.slice(i, i + batchSize),
-      body = (expand: boolean) =>
-        `<c:calendar-multiget xmlns:d="DAV:" xmlns:c="${CAL}"><d:prop><d:getetag/><c:calendar-data>${expand ? `<c:expand start="${stamp(from)}" end="${stamp(to)}"/>` : ''}</c:calendar-data></d:prop>${chunk.map((h) => `<d:href>${escapeXml(new URL(h).pathname)}</d:href>`).join('')}</c:calendar-multiget>`;
+    const chunk = hrefs.slice(i, i + batchSize);
     let result;
     if (individual) {
       onPhase('event-read');
       for (const href of chunk) {
-        const { etag, ics } = await get.resource(href, c.url);
+        const { etag, ics } = await readIndividual(href);
         data.set(href, { etag, events: await normalizeIcs(ics, href, c, zone, from, to) });
       }
       i += chunk.length;
@@ -398,7 +433,7 @@ async function importResources(
     }
     try {
       // RFC 4791 section 7.9: multiget should omit Depth.
-      result = await get(c.url, 'REPORT', body(expand), null);
+      result = await get(c.url, 'REPORT', body(chunk, expand), null);
     } catch (e) {
       const retryRaw =
         expand &&
@@ -417,7 +452,7 @@ async function importResources(
       // same expensive timeout. Normalization and commit remain all-or-nothing.
       expand = false;
       try {
-        result = await get(c.url, 'REPORT', body(false), null);
+        result = await get(c.url, 'REPORT', body(chunk, false), null);
       } catch (rawError) {
         if (!transportFailure(rawError)) throw rawError;
         // Retry the same resources in smaller batches; the shared client still
