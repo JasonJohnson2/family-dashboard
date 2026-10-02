@@ -222,7 +222,7 @@ export default function App() {
                     edit={(choreId) => setEditor({ kind: 'chore', choreId })}
                   />
                 )}
-                {section === 'rewards' && <Rewards />}
+                {section === 'rewards' && <Rewards manageFamily={() => open('family')} />}
                 {section === 'meals' && <Meals open={(date) => open('meal', date)} />}
                 {section === 'lists' && (
                   <Lists open={() => setEditor({ kind: 'list', newList: true })} />

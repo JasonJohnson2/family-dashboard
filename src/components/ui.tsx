@@ -181,12 +181,13 @@ export function ChoreRow({
             <p>{chore.title}</p>
             {done ? (
               <p>
-                The original star award will be reversed. If those stars have been spent, an
-                operator must restore the balance first.
+                Any original star award will be reversed, even if the member is now an adult. If
+                those stars have been spent, restore Child status and ask an operator to restore the
+                balance first.
               </p>
             ) : (
               <label>
-                Completed by
+                Completed by (children earn stars; adults complete without stars)
                 <select value={actor} onChange={(e) => setActor(e.target.value)}>
                   <option value="">Choose a member</option>
                   {eligible.map((m) => (
@@ -209,7 +210,11 @@ export function ChoreRow({
                   setConfirm(false);
                 }}
               >
-                {done ? 'Undo completion' : 'Complete and earn stars'}
+                {done
+                  ? 'Undo completion'
+                  : eligible.find((m) => m.id === actor)?.role === 'child'
+                    ? 'Complete and earn stars'
+                    : 'Complete chore'}
               </button>
             </div>
           </div>

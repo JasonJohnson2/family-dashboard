@@ -20,6 +20,7 @@ async function prepare(request: APIRequestContext) {
     expect(response.ok(), await response.text()).toBe(true);
     latest = (await response.json()) as HouseholdState;
   }
+  for (const m of latest.family) await save({ type: 'member.put', value: { ...m, role: 'child' } });
   const state = latest;
   const member = state.family[0];
   const definitions: Pick<Reward, 'name' | 'icon' | 'starCost'>[] = [

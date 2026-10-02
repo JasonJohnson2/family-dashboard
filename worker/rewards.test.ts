@@ -1,14 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { applyMigration, createDatabase, migrate, seed } from '../scripts/test-database';
 import type { HouseholdState, Mutation, Operation } from '../src/data/contracts';
-import { starBalance, type Reward } from '../src/data/rewards';
+import {
+  childMembers,
+  eligibleFor,
+  rewardSchema,
+  starBalance,
+  type Reward,
+} from '../src/data/rewards';
 import { readState } from './database';
 import { authenticatedWorker as worker, testSession } from '../scripts/test-auth';
 
 describe('Rewards on real D1', () => {
   let runtime: ReturnType<typeof createDatabase>, db: D1Database, env: Env, token: string;
   const pin = 'test-only-48269173';
-  const member = { id: 'alex', name: 'Alex', initial: 'A', color: '#123456', tint: '#eeeeee' };
+  const member = {
+    id: 'alex',
+    name: 'Alex',
+    role: 'child' as const,
+    initial: 'A',
+    color: '#123456',
+    tint: '#eeeeee',
+  };
   const reward: Reward = {
     id: 'dinner',
     name: 'Pick dinner',
@@ -76,6 +89,215 @@ describe('Rewards on real D1', () => {
   });
   afterEach(async () => {
     await runtime.dispose();
+  });
+
+  it('creates explicit roles, preserves normal adult chores, and never awards an adult stars', async () => {
+    const adult = { ...member, id: 'parent', name: 'Parent', role: 'adult' as const };
+    await save({ type: 'member.put', value: adult }, 200, false);
+    await save({ type: 'chore.put', value: { ...chore, memberIds: ['alex', 'parent'] } });
+    const response = await save(
+      {
+        type: 'chore.complete',
+        id: chore.id,
+        date: chore.dueDate,
+        completed: true,
+        memberId: adult.id,
+      },
+      200,
+      false,
+    );
+    expect(response.chores[0].completedDates).toContain(chore.dueDate);
+    expect(response.choreAwards).toEqual([]);
+    expect(response.starTransactions).toEqual([]);
+    await save(
+      { type: 'chore.complete', id: chore.id, date: chore.dueDate, completed: false },
+      200,
+      false,
+    );
+    expect(balance(await complete())).toBe(5);
+    expect(balance(await complete())).toBe(5);
+    await save({ type: 'stars.adjust', memberId: adult.id, amount: 5, note: 'Direct bypass' }, 422);
+    const malformed = await send({
+      id: crypto.randomUUID(),
+      revision: (await load()).household.revision,
+      operations: [{ type: 'member.put', value: { ...adult, role: 'operator' } }],
+    } as unknown as Mutation);
+    expect(malformed.status).toBe(400);
+  });
+
+  it('requires actual household child eligibility for redemption, requests, adjustments and approvals', async () => {
+    await adjust(40);
+    await save({ type: 'reward.put', value: reward });
+    await redeem('enjoyed');
+    await save({ type: 'reward.put', value: { ...reward, requiresApproval: true } });
+    await redeem('pending');
+    const before = await load();
+    const adult = { ...member, role: 'adult' as const };
+    await save({ type: 'member.put', value: adult }, 200, false);
+    expect(childMembers((await load()).family)).toEqual([]);
+    expect(eligibleFor(reward, adult)).toBe(false);
+    for (const requiresApproval of [false, true]) {
+      await save({ type: 'reward.put', value: { ...reward, requiresApproval } });
+      await save(
+        { type: 'reward.redeem', id: crypto.randomUUID(), rewardId: reward.id, memberId: adult.id },
+        422,
+      );
+    }
+    await save(
+      { type: 'stars.adjust', memberId: adult.id, amount: -5, note: 'No adult spend' },
+      422,
+    );
+    await save({ type: 'reward.resolve', id: 'pending', approve: true }, 422);
+    const after = await load();
+    expect(after.starTransactions).toEqual(before.starTransactions);
+    expect(after.redemptions).toEqual(before.redemptions);
+    await save({ type: 'member.put', value: member }, 200, false);
+    expect(balance(await load())).toBe(30);
+    expect(childMembers((await load()).family)).toEqual([member]);
+    await save({ type: 'reward.resolve', id: 'pending', approve: true });
+    expect(balance(await load())).toBe(20);
+    // Roles never grant operator authorization.
+    await save(
+      { type: 'stars.adjust', memberId: member.id, amount: 1, note: 'PIN still required' },
+      403,
+      false,
+    );
+  }, 60_000);
+
+  it('retains restricted recipients without broadening eligibility and can decline former-child requests', async () => {
+    await save({ type: 'member.put', value: { ...member, id: 'other-child' } });
+    await adjust(20);
+    await save({
+      type: 'reward.put',
+      value: { ...reward, memberIds: ['alex'], requiresApproval: true },
+    });
+    await redeem('pending');
+    await save({ type: 'member.put', value: { ...member, role: 'adult' } });
+    const restricted = (await load()).rewards[0];
+    expect(restricted.memberIds).toEqual(['alex']);
+    expect(
+      eligibleFor(
+        restricted,
+        (await load()).family.find((m) => m.id === 'other-child'),
+      ),
+    ).toBe(false);
+    await save({
+      type: 'reward.put',
+      value: { ...rewardSchema.strip().parse(restricted), active: false },
+    });
+    await save({ type: 'reward.put', value: { ...reward, id: 'new', memberIds: ['alex'] } }, 422);
+    await save({ type: 'reward.resolve', id: 'pending', approve: false });
+    expect(balance(await load())).toBe(20);
+    expect((await load()).redemptions[0].status).toBe('declined');
+    await save({ type: 'reward.put', value: reward });
+    expect(
+      eligibleFor(
+        reward,
+        (await load()).family.find((m) => m.id === 'other-child'),
+      ),
+    ).toBe(true);
+    expect(
+      eligibleFor(
+        reward,
+        (await load()).family.find((m) => m.id === 'alex'),
+      ),
+    ).toBe(false);
+  });
+
+  it('reverses a historical child award after becoming adult without creating a new adult award', async () => {
+    await save({ type: 'chore.put', value: chore });
+    await complete();
+    const earned = await load();
+    await save({ type: 'member.put', value: { ...member, role: 'adult' } });
+    expect((await load()).starTransactions).toEqual(earned.starTransactions);
+    await complete(chore.dueDate, false);
+    expect(balance(await load())).toBe(0);
+    await complete();
+    expect((await load()).starTransactions).toHaveLength(2);
+    expect((await load()).choreAwards).toHaveLength(1);
+    await save({ type: 'member.put', value: member });
+    // A previously completed adult chore must not gain a retroactive award.
+    await complete();
+    expect(balance(await load())).toBe(0);
+    await complete(chore.dueDate, false);
+    expect(balance(await complete())).toBe(5);
+  });
+
+  it('prevents role/financial batch bypasses and rejects a child from another household', async () => {
+    await save({ type: 'member.put', value: { ...member, role: 'adult' } });
+    const before = await load();
+    const response = await send({
+      id: crypto.randomUUID(),
+      revision: before.household.revision,
+      operations: [
+        { type: 'member.put', value: member },
+        { type: 'stars.adjust', memberId: member.id, amount: 10, note: 'Batch' },
+      ],
+    });
+    expect(response.status).toBe(400);
+    expect(await load()).toEqual(before);
+    await db.batch([
+      db.prepare("INSERT INTO households (id,name,timeZone) VALUES ('elsewhere','Other','UTC')"),
+      db.prepare(
+        "INSERT INTO members (household_id,id,name,initial,color,tint,role) VALUES ('elsewhere','foreign-child','Child','C','#123456','#eeeeee','child')",
+      ),
+    ]);
+    await save({ type: 'reward.put', value: reward });
+    await save(
+      { type: 'reward.redeem', id: 'bad', rewardId: reward.id, memberId: 'foreign-child' },
+      400,
+    );
+    await save({ type: 'stars.adjust', memberId: 'foreign-child', amount: 5, note: 'No' }, 400);
+    await save({ type: 'reward.put', value: { ...reward, memberIds: ['foreign-child'] } }, 400);
+  });
+
+  it('defaults existing members to adults without rewriting historical data or initializing balances', async () => {
+    const oldRuntime = createDatabase();
+    try {
+      const old = (await oldRuntime.getD1Database('DB')) as unknown as D1Database;
+      await migrate(old, '0006_household_access.sql');
+      await seed(old);
+      await old
+        .prepare(
+          "INSERT INTO star_transactions(household_id,id,memberId,amount,type,note,createdAt) VALUES ('home','historical','jason',120,'manual_adjustment','Existing history','2026-01-01')",
+        )
+        .run();
+      const names = [
+        'households',
+        'members',
+        'events',
+        'event_members',
+        'chore_completions',
+        'meals',
+        'lists',
+        'list_items',
+        'rewards',
+        'reward_members',
+        'reward_redemptions',
+        'star_transactions',
+        'google_connections',
+        'google_calendars',
+        'household_credentials',
+        'household_sessions',
+      ];
+      const before = await Promise.all(
+        names.map(async (t) => (await old.prepare(`SELECT * FROM ${t}`).all()).results),
+      );
+      await applyMigration(old, '0007_member_roles.sql');
+      for (const [i, table] of names.entries()) {
+        const rows = (await old.prepare(`SELECT * FROM ${table}`).all()).results;
+        expect(table === 'members' ? rows.map(({ role: _, ...rest }) => rest) : rows).toEqual(
+          before[i],
+        );
+      }
+      const state = await readState(old);
+      expect(state.family.every((m) => m.role === 'adult')).toBe(true);
+      expect(childMembers(state.family)).toEqual([]);
+      expect(starBalance(state.starTransactions, 'jason')).toBe(120);
+      await expect(old.prepare("UPDATE members SET role='unknown'").run()).rejects.toThrow();
+    } finally {
+      await oldRuntime.dispose();
+    }
   });
 
   it('requires a PIN server-side for management, adjustments, approvals and paid chore configuration', async () => {
@@ -371,7 +593,7 @@ describe('Rewards on real D1', () => {
     await db.batch([
       db.prepare("INSERT INTO households (id,name,timeZone) VALUES ('other','Other','UTC')"),
       db.prepare(
-        "INSERT INTO members VALUES ('other','outsider','Elsewhere','E','#123456','#eeeeee')",
+        "INSERT INTO members (household_id,id,name,initial,color,tint) VALUES ('other','outsider','Elsewhere','E','#123456','#eeeeee')",
       ),
     ]);
     await save({ type: 'stars.adjust', memberId: 'outsider', amount: 10, note: 'No' }, 400);
@@ -461,6 +683,7 @@ describe('Rewards on real D1', () => {
         expect((await old.prepare(`SELECT * FROM ${tables[i]}`).all()).results).toEqual(
           snapshots[i].results,
         );
+      await applyMigration(old, '0007_member_roles.sql');
       const state = await readState(old);
       expect(state.chores.every((c) => c.stars === 0)).toBe(true);
       expect(state.starTransactions).toEqual([]);

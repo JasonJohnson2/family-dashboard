@@ -159,3 +159,7 @@ Landscape photograph: [Unsplash source](https://images.unsplash.com/photo-147077
 ## Rewards
 
 Rewards V1 adds individual Stars, paid chores, household rewards, approval requests and auditable activity. Configure the `REWARDS_OPERATOR_PIN` Worker secret (at least 8 characters) to enable operator controls. The new additive `0005_rewards.sql` migration runs through the existing deployment script; existing chores start at zero stars and no demo rewards are inserted. See [Rewards setup and architecture](docs/rewards.md) for PIN setup, ledger rules, undo behavior, approvals, concurrency, and validation.
+
+## Member roles and child Rewards
+
+Migration `0007_member_roles.sql` defaults every existing member to Adult without changing star or redemption history. After deployment, open the family avatars → **Member type** → mark each child **Child** → **Save family**. Only children participate in Rewards; adults can still complete chores without earning stars. Family editing retains its existing authenticated-household access, and all operator-PIN protections remain unchanged. See [roles, history and setup](docs/rewards.md#adult--child-roles-migration-0007).

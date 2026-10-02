@@ -46,7 +46,14 @@ describe('Worker API with real local D1', () => {
     expect(response.status, await response.clone().text()).toBe(200);
     return (await response.json()) as HouseholdState;
   }
-  const member = { id: 'a', name: 'Alex', initial: 'A', color: '#123456', tint: '#eeeeee' };
+  const member = {
+    id: 'a',
+    name: 'Alex',
+    role: 'child' as const,
+    initial: 'A',
+    color: '#123456',
+    tint: '#eeeeee',
+  };
   const event = {
     id: 'e',
     sourceId: 'local',
@@ -235,7 +242,9 @@ describe('Worker API with real local D1', () => {
       .prepare("INSERT INTO households(id,name,timeZone) VALUES('other','Other','UTC')")
       .run();
     await db
-      .prepare("INSERT INTO members VALUES('other','private','Secret','S','#123456','#eeeeee')")
+      .prepare(
+        "INSERT INTO members (household_id,id,name,initial,color,tint) VALUES('other','private','Secret','S','#123456','#eeeeee')",
+      )
       .run();
     const name = "O'Brien'); DROP TABLE members;--".slice(0, 30);
     await save([{ type: 'member.put', value: { ...member, name } }]);

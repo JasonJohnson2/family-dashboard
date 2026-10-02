@@ -9,10 +9,10 @@ import type {
 import { addDays, daysFrom, weekStart } from '../lib/dates';
 
 export const family: FamilyMember[] = [
-  { id: 'jason', name: 'Jason', initial: 'J', color: '#2877c5', tint: '#dceeff' },
-  { id: 'kelly', name: 'Kelly', initial: 'K', color: '#278363', tint: '#d8efe2' },
-  { id: 'mia', name: 'Mia', initial: 'M', color: '#bf642f', tint: '#ffe4cf' },
-  { id: 'liam', name: 'Liam', initial: 'L', color: '#8b5bc4', tint: '#eee0fa' },
+  { id: 'jason', name: 'Jason', role: 'adult', initial: 'J', color: '#2877c5', tint: '#dceeff' },
+  { id: 'kelly', name: 'Kelly', role: 'adult', initial: 'K', color: '#278363', tint: '#d8efe2' },
+  { id: 'mia', name: 'Mia', role: 'adult', initial: 'M', color: '#bf642f', tint: '#ffe4cf' },
+  { id: 'liam', name: 'Liam', role: 'adult', initial: 'L', color: '#8b5bc4', tint: '#eee0fa' },
 ];
 export const calendarSources: CalendarSource[] = [
   { id: 'household-demo', name: 'Household · demo', provider: 'mock', color: '#2877c5' },

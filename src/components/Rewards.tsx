@@ -3,6 +3,7 @@ import { ArrowRight, Gift, History, Plus, Settings2, Star, Trophy } from 'lucide
 import { useHousehold } from '../store';
 import {
   alreadyRedeemed,
+  childMembers,
   eligibleFor,
   rewardIcons,
   rewardSchema,
@@ -15,8 +16,9 @@ import { Avatar, Card, Empty, Modal } from './ui';
 import { RewardOperator } from './RewardOperator';
 import type { Operation } from '../data/contracts';
 
-export function HomeRewards() {
+export function HomeRewards({ manageFamily }: { manageFamily: () => void }) {
   const { family, starTransactions } = useHousehold();
+  const children = childMembers(family);
   return (
     <Card
       title="Little efforts, lovely rewards"
@@ -29,7 +31,7 @@ export function HomeRewards() {
       className="home-rewards"
     >
       <div className="home-star-balances">
-        {family.map((m) => (
+        {children.map((m) => (
           <span key={m.id}>
             <Avatar id={m.id} small />
             {m.name}
@@ -40,16 +42,25 @@ export function HomeRewards() {
           </span>
         ))}
       </div>
-      {!family.length && <p className="muted">Add your family to start earning stars together.</p>}
+      {!children.length && (
+        <div className="rewards-empty">
+          <p>No kids are set up for Rewards yet.</p>
+          <button className="outline-button" onClick={manageFamily}>
+            Manage family
+          </button>
+        </div>
+      )}
     </Card>
   );
 }
 
-export function Rewards() {
+export function Rewards({ manageFamily }: { manageFamily: () => void }) {
   const { family, rewards, redemptions, starTransactions, mutate, sync, setNotice } =
     useHousehold();
+  const children = childMembers(family);
+  const [householdHistory, setHouseholdHistory] = useState(false);
   const [selected, setSelected] = useState('');
-  const memberId = family.some((m) => m.id === selected) ? selected : (family[0]?.id ?? '');
+  const memberId = children.some((m) => m.id === selected) ? selected : (children[0]?.id ?? '');
   const person = family.find((m) => m.id === memberId);
   const balance = starBalance(starTransactions, memberId);
   const [all, setAll] = useState(false);
@@ -64,16 +75,24 @@ export function Rewards() {
   const [busy, setBusy] = useState(false);
   const visible = rewards.filter(
     (r) =>
-      all || (r.active && eligibleFor(r, memberId) && !alreadyRedeemed(r, memberId, redemptions)),
+      all || (r.active && eligibleFor(r, person) && !alreadyRedeemed(r, memberId, redemptions)),
   );
   const activity = [
     ...starTransactions
-      .filter((t) => t.memberId === memberId)
-      .map((t) => ({ id: t.id, at: t.createdAt, note: t.note, amount: t.amount, status: '' })),
+      .filter((t) => householdHistory || t.memberId === memberId)
+      .map((t) => ({
+        id: t.id,
+        memberId: t.memberId,
+        at: t.createdAt,
+        note: t.note,
+        amount: t.amount,
+        status: '',
+      })),
     ...redemptions
-      .filter((r) => r.memberId === memberId && r.status !== 'redeemed')
+      .filter((r) => (householdHistory || r.memberId === memberId) && r.status !== 'redeemed')
       .map((r) => ({
         id: r.id,
+        memberId: r.memberId,
         at: r.resolvedAt ?? r.createdAt,
         note: r.name,
         amount: 0,
@@ -112,13 +131,13 @@ export function Rewards() {
         </button>
       </div>
       <div className="member-rewards" aria-label="Choose a member for rewards">
-        {family.map((m) => {
+        {children.map((m) => {
           const stars = starBalance(starTransactions, m.id);
           const next = rewards
             .filter(
               (r) =>
                 r.active &&
-                eligibleFor(r, m.id) &&
+                eligibleFor(r, m) &&
                 !alreadyRedeemed(r, m.id, redemptions) &&
                 r.starCost > stars,
             )
@@ -160,8 +179,17 @@ export function Rewards() {
           );
         })}
       </div>
-      {!family.length && (
-        <Empty>Add household members using the family button above to get started.</Empty>
+      {!children.length && (
+        <div className="card rewards-empty">
+          <h3>No kids are set up for Rewards yet.</h3>
+          <p>
+            Mark a household member as a Child in Family settings to start earning stars and
+            redeeming rewards.
+          </p>
+          <button className="outline-button" onClick={manageFamily}>
+            Manage family
+          </button>
+        </div>
       )}
       {pending.length > 0 && (
         <button className="pending-banner" onClick={() => setManage(true)}>
@@ -186,7 +214,7 @@ export function Rewards() {
         </div>
         <div className="reward-grid">
           {visible.map((r, index) => {
-            const eligible = eligibleFor(r, memberId),
+            const eligible = eligibleFor(r, person),
               used = alreadyRedeemed(r, memberId, redemptions);
             const waiting = redemptions.some(
               (d) => d.rewardId === r.id && d.memberId === memberId && d.status === 'pending',
@@ -194,7 +222,7 @@ export function Rewards() {
             const status = !r.active
               ? 'Inactive'
               : !eligible
-                ? 'For other family members'
+                ? 'For other children'
                 : used
                   ? 'Already enjoyed'
                   : waiting
@@ -259,31 +287,55 @@ export function Rewards() {
           </Empty>
         )}
       </Card>
-      <a className="earn-stars card" href="#chores">
-        <span className="card-icon green">
-          <Star size={24} />
-        </span>
-        <div>
-          <h3>Earn more stars</h3>
-          <p>Small jobs make a big difference. See what needs doing.</p>
-        </div>
-        <ArrowRight size={20} />
-      </a>
+      {person && (
+        <a className="earn-stars card" href="#chores">
+          <span className="card-icon green">
+            <Star size={24} />
+          </span>
+          <div>
+            <h3>Earn more stars</h3>
+            <p>Small jobs make a big difference. See what needs doing.</p>
+          </div>
+          <ArrowRight size={20} />
+        </a>
+      )}
       <Card
-        title={person ? `${person.name}’s activity` : 'Recent activity'}
+        title={
+          householdHistory
+            ? 'Household reward history'
+            : person
+              ? `${person.name}’s activity`
+              : 'Recent activity'
+        }
         icon={History}
         action={activity.length > 6 ? () => setHistory(!history) : undefined}
         actionLabel={history ? 'Show recent' : 'View history'}
       >
+        <button
+          className="outline-button"
+          aria-pressed={householdHistory}
+          onClick={() => setHouseholdHistory(!householdHistory)}
+        >
+          {householdHistory ? 'Selected child’s activity' : 'Household reward history'}
+        </button>
         <p className="reward-history-intro">
-          {balance} stars · Every award and spend, accounted for.
+          {householdHistory
+            ? 'All past awards, requests and redemptions, including members who are now adults.'
+            : person
+              ? `${balance} stars · Every award and spend, accounted for.`
+              : 'View household reward history to see past activity.'}
         </p>
         <div className="reward-activity">
           {activity.slice(0, history ? activity.length : 6).map((a) => (
             <div key={a.id} className="reward-activity-row">
-              <Avatar id={memberId} small />
+              <Avatar id={a.memberId} small />
               <div>
-                <span>{a.note}</span>
+                <span>
+                  {householdHistory && (
+                    <strong>{family.find((m) => m.id === a.memberId)?.name} · </strong>
+                  )}
+                  {a.note}
+                </span>
                 <small>
                   {a.status ||
                     new Date(a.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
@@ -351,7 +403,11 @@ function RewardManager({ onClose }: { onClose: () => void }) {
   const [, render] = useState(0);
   const unlocked = operatorUnlocked();
   const [draft, setDraft] = useState<Reward | null>(null);
-  const [memberId, setMemberId] = useState(family[0]?.id ?? '');
+  const children = childMembers(family);
+  const [selectedMember, setMemberId] = useState('');
+  const memberId = children.some((m) => m.id === selectedMember)
+    ? selectedMember
+    : (children[0]?.id ?? '');
   const [amount, setAmount] = useState('5');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -494,15 +550,21 @@ function RewardManager({ onClose }: { onClose: () => void }) {
                 </label>
                 <fieldset>
                   <legend>Available to</legend>
+                  {draft.memberIds.some((id) => !children.some((m) => m.id === id)) && (
+                    <p className="muted">
+                      Previous recipients who are now adults remain ineligible. Choose All kids or
+                      select children to replace that restriction.
+                    </p>
+                  )}
                   <div className="assignment-options">
                     <button
                       type="button"
                       aria-pressed={!draft.memberIds.length}
                       onClick={() => setDraft({ ...draft, memberIds: [] })}
                     >
-                      Everyone
+                      All kids
                     </button>
-                    {family.map((m) => (
+                    {children.map((m) => (
                       <button
                         type="button"
                         key={m.id}
@@ -511,8 +573,15 @@ function RewardManager({ onClose }: { onClose: () => void }) {
                           setDraft({
                             ...draft,
                             memberIds: draft.memberIds.includes(m.id)
-                              ? draft.memberIds.filter((id) => id !== m.id)
-                              : [...draft.memberIds, m.id],
+                              ? draft.memberIds.filter(
+                                  (id) => id !== m.id && children.some((child) => child.id === id),
+                                )
+                              : [
+                                  ...draft.memberIds.filter((id) =>
+                                    children.some((child) => child.id === id),
+                                  ),
+                                  m.id,
+                                ],
                           })
                         }
                       >
@@ -594,6 +663,8 @@ function RewardManager({ onClose }: { onClose: () => void }) {
                       </strong>
                       <small>
                         {r.starCost} stars · requested {new Date(r.createdAt).toLocaleDateString()}
+                        {!children.some((m) => m.id === r.memberId) &&
+                          ' · No longer a child; decline or update their member type before approving.'}
                       </small>
                     </p>
                     <div className="form-actions">
@@ -610,6 +681,7 @@ function RewardManager({ onClose }: { onClose: () => void }) {
                       </button>
                       <button
                         className="primary"
+                        disabled={!children.some((m) => m.id === r.memberId)}
                         onClick={() =>
                           setConfirm({
                             text: `Approve ${r.name} and spend ${r.starCost} stars?`,
@@ -624,57 +696,65 @@ function RewardManager({ onClose }: { onClose: () => void }) {
                 ))}
                 {!pending.length && <p className="muted">All caught up. No requests waiting.</p>}
                 <h3>Adjust stars</h3>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    setConfirm({
-                      text: `Adjust ${family.find((m) => m.id === memberId)?.name}’s stars by ${Number(amount) > 0 ? '+' : ''}${amount}? Reason: ${note}`,
-                      op: { type: 'stars.adjust', memberId, amount: Number(amount), note },
-                    });
-                  }}
-                  className="star-adjustment"
-                >
-                  <label>
-                    Member
-                    <select value={memberId} required onChange={(e) => setMemberId(e.target.value)}>
-                      {family.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="muted">
-                    Current balance: {starBalance(starTransactions, memberId)} stars
-                  </p>
-                  <label>
-                    Adjustment (positive or negative)
-                    <input
-                      type="number"
-                      required
-                      min={-100000}
-                      max={100000}
-                      step={1}
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Reason
-                    <input
-                      required
-                      maxLength={200}
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="outline-button"
-                    disabled={!memberId || !Number(amount) || !note.trim()}
+                {!children.length ? (
+                  <p className="muted">No kids are set up for star adjustments yet.</p>
+                ) : (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      setConfirm({
+                        text: `Adjust ${family.find((m) => m.id === memberId)?.name}’s stars by ${Number(amount) > 0 ? '+' : ''}${amount}? Reason: ${note}`,
+                        op: { type: 'stars.adjust', memberId, amount: Number(amount), note },
+                      });
+                    }}
+                    className="star-adjustment"
                   >
-                    Review adjustment
-                  </button>
-                </form>
+                    <label>
+                      Member
+                      <select
+                        value={memberId}
+                        required
+                        onChange={(e) => setMemberId(e.target.value)}
+                      >
+                        {children.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p className="muted">
+                      Current balance: {starBalance(starTransactions, memberId)} stars
+                    </p>
+                    <label>
+                      Adjustment (positive or negative)
+                      <input
+                        type="number"
+                        required
+                        min={-100000}
+                        max={100000}
+                        step={1}
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Reason
+                      <input
+                        required
+                        maxLength={200}
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="outline-button"
+                      disabled={!memberId || !Number(amount) || !note.trim()}
+                    >
+                      Review adjustment
+                    </button>
+                  </form>
+                )}
               </>
             )}
           </fieldset>

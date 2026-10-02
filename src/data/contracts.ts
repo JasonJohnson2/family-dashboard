@@ -54,6 +54,7 @@ const memberIds = z
   .refine((ids) => new Set(ids).size === ids.length);
 export const memberSchema: z.ZodType<FamilyMember> = z
   .object({
+    role: z.enum(['adult', 'child']),
     id: idSchema,
     name: z.string().trim().min(1).max(30),
     initial: z.string().min(1).max(4),

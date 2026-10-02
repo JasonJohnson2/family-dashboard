@@ -1,6 +1,7 @@
 export type DateKey = string; // YYYY-MM-DD in the household's local calendar.
 export type MemberId = string;
 export interface FamilyMember {
+  role: 'adult' | 'child';
   id: MemberId;
   name: string;
   initial: string;

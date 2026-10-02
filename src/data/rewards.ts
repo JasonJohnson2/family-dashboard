@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { FamilyMember } from '../types';
+export const childMembers = (family: FamilyMember[]) => family.filter((m) => m.role === 'child');
 
 const id = z
   .string()
@@ -77,8 +79,8 @@ export type Redemption = z.infer<typeof redemptionSchema>;
 export type StarTransaction = z.infer<typeof transactionSchema>;
 export const starBalance = (transactions: StarTransaction[], memberId: string) =>
   transactions.filter((t) => t.memberId === memberId).reduce((sum, t) => sum + t.amount, 0);
-export const eligibleFor = (reward: Reward, memberId: string) =>
-  !!memberId && (!reward.memberIds.length || reward.memberIds.includes(memberId));
+export const eligibleFor = (reward: Reward, member: FamilyMember | undefined) =>
+  member?.role === 'child' && (!reward.memberIds.length || reward.memberIds.includes(member.id));
 export const alreadyRedeemed = (reward: Reward, memberId: string, redemptions: Redemption[]) =>
   !reward.reusable &&
   redemptions.some(

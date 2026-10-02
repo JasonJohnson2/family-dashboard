@@ -95,7 +95,7 @@ export function Home({ navigate, open, viewEvent }: Props) {
           )}
         </Card>
       </div>
-      <HomeRewards />
+      <HomeRewards manageFamily={() => open('family')} />
       <div className="dashboard-columns">
         <div className="dashboard-column">
           <Card

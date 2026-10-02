@@ -17,7 +17,7 @@ export function seedStatements(mode: 'starter' | 'demo', today = dateKey(new Dat
       `INSERT OR IGNORE INTO ${table} (${Object.keys(values).join(',')}) SELECT ${Object.values(values).map(quote).join(',')} WHERE ${guard}`,
     );
   }
-  family.forEach((person) => put('members', person));
+  family.forEach(({ role: _role, ...person }) => put('members', person));
   const data = createMockData(today);
   for (const list of data.lists) {
     put('lists', { id: list.id, name: list.name });

@@ -29,6 +29,15 @@ export function validateRewards(state: HouseholdState, operations: Operation[]) 
     if (!state.family.some((m) => m.id === id))
       throw new ApiError(400, 'Choose an existing household member.');
   };
+  const child = (id: string) => {
+    member(id);
+    if (state.family.find((m) => m.id === id)?.role !== 'child')
+      throw new ApiError(
+        422,
+        'Only child members participate in Rewards and Stars.',
+        'child_required',
+      );
+  };
   const enough = (id: string, amount: number) => {
     if (starBalance(state.starTransactions, id) < amount)
       throw new ApiError(
@@ -39,8 +48,13 @@ export function validateRewards(state: HouseholdState, operations: Operation[]) 
   };
   for (const op of operations) {
     if (op.type === 'reward.put') {
-      op.value.memberIds.forEach(member);
       const old = state.rewards.find((r) => r.id === op.value.id);
+      op.value.memberIds.forEach((id) => {
+        member(id);
+        // Retain dormant existing recipients without broadening a restricted reward.
+        // They remain ineligible until classified as children again.
+        if (!old?.memberIds.includes(id)) child(id);
+      });
       if (
         old &&
         old.reusable !== op.value.reusable &&
@@ -54,15 +68,21 @@ export function validateRewards(state: HouseholdState, operations: Operation[]) 
     if (op.type === 'reward.delete' && state.redemptions.some((r) => r.rewardId === op.id))
       throw new ApiError(422, 'This reward has history. Deactivate it instead.');
     if (op.type === 'stars.adjust') {
-      member(op.memberId);
+      child(op.memberId);
       if (op.amount < 0) enough(op.memberId, -op.amount);
     }
     if (op.type === 'reward.redeem') {
-      member(op.memberId);
+      child(op.memberId);
       if (state.redemptions.some((r) => r.id === op.id))
         throw new ApiError(409, 'This request has already been submitted.', 'already_submitted');
       const reward = state.rewards.find((r) => r.id === op.rewardId);
-      if (!reward?.active || !eligibleFor(reward, op.memberId))
+      if (
+        !reward?.active ||
+        !eligibleFor(
+          reward,
+          state.family.find((m) => m.id === op.memberId),
+        )
+      )
         throw new ApiError(422, 'This reward is not available to this member.');
       if (alreadyRedeemed(reward, op.memberId, state.redemptions))
         throw new ApiError(422, 'This one-time reward has already been redeemed.');
@@ -79,10 +99,14 @@ export function validateRewards(state: HouseholdState, operations: Operation[]) 
       if (!request || request.status !== 'pending')
         throw new ApiError(422, 'This request has already been resolved or no longer exists.');
       if (op.approve) {
+        child(request.memberId);
         const reward = state.rewards.find((r) => r.id === request.rewardId)!;
         if (
           !reward.active ||
-          !eligibleFor(reward, request.memberId) ||
+          !eligibleFor(
+            reward,
+            state.family.find((m) => m.id === request.memberId),
+          ) ||
           alreadyRedeemed(reward, request.memberId, state.redemptions)
         )
           throw new ApiError(
@@ -244,7 +268,12 @@ export function rewardStatements(
     }
     case 'chore.complete': {
       const chore = state.chores.find((c) => c.id === op.id)!;
-      if (op.completed && !chore.completedDates.includes(op.date) && chore.stars) {
+      if (
+        op.completed &&
+        !chore.completedDates.includes(op.date) &&
+        chore.stars &&
+        state.family.find((m) => m.id === op.memberId)?.role === 'child'
+      ) {
         insert('chore_star_awards', {
           id: mutationId,
           choreId: chore.id,

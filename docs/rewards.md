@@ -12,6 +12,22 @@ The household owner must configure **`REWARDS_OPERATOR_PIN` as a Worker secret**
 
 Without that secret, viewing Rewards and existing chore behavior work, but management and star-value configuration fail closed with a setup message. Once configured, open Rewards → Manage rewards → Unlock operator controls, create household rewards, and edit chores to assign star values.
 
+## Adult / Child roles (migration 0007)
+
+`0007_member_roles.sql` adds `members.role TEXT NOT NULL DEFAULT 'adult'`, constrained to `adult` or `child`. It changes no previous migration and does not infer roles from names, ages, or star history. Existing members and new starter/demo members default to **Adult**. There are no automatic star awards or balance initialization rows.
+
+**After deployment:** sign in, tap the header family avatars (**Manage family members**), choose **Child** in the **Member type** selector for each child, leave adults as **Adult**, and tap **Save family**. The no-child state on Home and Rewards also has a **Manage family** button. New members default to Adult until you explicitly choose Child. No new secret, binding, seed, or manual production deployment is needed.
+
+Family editing was already available to authenticated household devices without the operator PIN; that access is preserved. Adult/Child is classification, not identity verification or operator privilege. Selecting Adult never unlocks anything. The existing PIN still protects reward management, approvals, adjustments, and paid-chore configuration.
+
+Only children appear in active Rewards cards, Home star summaries, recipient choices and manual adjustment targets. **All kids** means all current children. Adults still appear in ordinary Calendar/Chores assignments and may complete paid chores, with no new award or ledger entry. Paid chores still require a valid assigned completion actor. A normal adult completion is valid, while forged adult star adjustments, redemptions, requests and approvals are rejected by the Worker using the current household state read from D1. Role changes and financial actions cannot be combined into a bypassing batch; the household revision protects concurrent changes.
+
+**Child → Adult:** stop participation immediately and hide their balance; preserve all ledger entries, redemptions, pending requests and restricted reward recipient references. Pending requests cannot be approved while the member is adult; an operator can decline them. Existing restricted recipients stay dormant rather than silently converting the reward to All kids. The reward editor explains this and lets you explicitly choose All kids or replace the recipients with children. New adult recipient assignments are rejected. Existing dormant references can be retained when editing/deactivating a reward.
+
+**Adult → Child:** participation returns with the sum of the existing ledger. The role change itself creates no transactions, redeems nothing, and gives no retroactive credit for previously completed adult chores. Explicitly undoing/re-completing a chore keeps the original occurrence rules. Undoing an older child award still appends its normal reversal even if the member is now adult; it never erases history or creates a new adult award. If those stars were spent, the original insufficient-balance guard still applies; restore Child status and use a PIN-authorized adjustment if appropriate before undoing.
+
+Use **Household reward history** on Rewards to inspect historical activity for all members, including current adults. Active participant selectors contain children only. Role checks and page loads are reads; a role edit updates its member record through the existing revision/receipt mechanism, without rewriting reward mappings or ledgers. Calendar, Google member mappings, household sessions and operator tokens are unaffected.
+
 ## Operator access
 
 The PIN protects reward creation/editing/deletion, approval/decline, manual adjustments, and creating/editing/deleting paid chores. The Worker enforces this on every privileged mutation. Completing chores and requesting/redeeming eligible rewards retain the application's shared-household access model. A member selection is a household choice, not authenticated proof of identity.
@@ -23,7 +39,7 @@ The unlock endpoint allows five attempts per household per fixed 15-minute windo
 ## Data and balance history
 
 - `rewards`: name, description, predefined emoji, integer cost (1–100,000), active/reusable/approval flags, creation/update timestamps.
-- `reward_members`: selected-member eligibility. No rows means everyone. Household-scoped foreign keys prevent foreign household references.
+- `reward_members`: selected-member eligibility. No rows means **all children**, never adults. Existing selected recipients who become adults are retained as dormant restrictions; they cannot participate until classified as children again. Household-scoped foreign keys prevent foreign household references.
 - `reward_redemptions`: member, reward, quoted name/cost, one-time flag, pending/redeemed/declined status and timestamps. The quote remains stable if a reward's current cost changes.
 - `chore_star_awards`: retained completion-cycle identity, chore occurrence date, member, amount, optional reversal timestamp.
 - `star_transactions`: append-style signed amounts, reason/type, member, chore/completion/reward/redemption references, timestamp. There is no API to edit or delete ledger entries.
@@ -32,7 +48,7 @@ A balance is the sum of that member's ledger amounts. No stored balance needs re
 
 ## Completing and undoing chores
 
-Each existing chore occurrence remains a single household checkbox. Zero-star chores work as before. Paid chores assigned to one member award that member automatically; shared/Everyone chores ask who completed them. The member must belong to this household and be eligible for that chore.
+Each existing chore occurrence remains a single household checkbox. Zero-star chores work as before. Paid chores assigned to one member use that member as the completion actor automatically; shared/Everyone chores ask who completed them. Only child actors receive the award; adult completion creates no star transaction. The member must belong to this household and be eligible for that chore.
 
 Completion, award identity, ledger entry, receipt and revision increment commit in one D1 batch. Duplicate completion does not award again. Daily/weekly/etc. occurrences can each earn their configured award. Undo writes a compensating negative entry using the original member and amount, then marks that award reversed. Completing again creates a new cycle; its net balance is correct because the earlier cycle was reversed.
 

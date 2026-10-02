@@ -876,7 +876,9 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
       .prepare("INSERT INTO households (id,name,timeZone) VALUES ('other','Other','UTC')")
       .run();
     await db
-      .prepare("INSERT INTO members VALUES ('other','outsider','Outside','O','#123456','#eeeeee')")
+      .prepare(
+        "INSERT INTO members (household_id,id,name,initial,color,tint) VALUES ('other','outsider','Outside','O','#123456','#eeeeee')",
+      )
       .run();
     for (const memberId of ['missing', 'outsider', 'bad/member'])
       expect((await settings(source, memberId)).status).toBe(400);

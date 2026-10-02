@@ -210,6 +210,7 @@ describe('Private household access on real D1', () => {
     ).not.toContain(next);
   });
   it('keeps ordinary actions available but Rewards privileges locked', async () => {
+    await db.prepare("UPDATE members SET role='child' WHERE household_id='home'").run();
     const cookie = await login();
     const state = await readState(db);
     const mutation = (operations: unknown[]) => ({
@@ -319,9 +320,26 @@ describe('Private household access on real D1', () => {
       const old = (await previous.getD1Database('DB')) as unknown as D1Database;
       await migrate(old, '0005_rewards.sql');
       await seed(old);
-      const before = await readState(old);
+      // Snapshot the original tables directly: current state types require later migrations.
+      const tables = [
+        'households',
+        'members',
+        'events',
+        'chores',
+        'meals',
+        'lists',
+        'list_items',
+        'rewards',
+        'star_transactions',
+        'reward_redemptions',
+      ];
+      const snapshot = () =>
+        Promise.all(
+          tables.map(async (t) => (await old.prepare(`SELECT * FROM ${t}`).all()).results),
+        );
+      const before = await snapshot();
       await applyMigration(old, '0006_household_access.sql');
-      expect(await readState(old)).toEqual(before);
+      expect(await snapshot()).toEqual(before);
       expect(await old.prepare('SELECT * FROM household_credentials').first()).toBeNull();
       expect(await old.prepare('SELECT * FROM household_sessions').first()).toBeNull();
     } finally {

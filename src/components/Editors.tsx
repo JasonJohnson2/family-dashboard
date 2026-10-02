@@ -280,7 +280,7 @@ export function Editor({
         <fieldset disabled={saving} className="editor-fields">
           <p className="form-intro">
             {kind === 'family'
-              ? 'The people who make this place home.'
+              ? 'The people who make this place home. Mark children to enable Rewards. Roles do not grant operator access; changing a role keeps all reward history.'
               : existingEvent?.recurrence.frequency !== undefined &&
                   existingEvent.recurrence.frequency !== 'none'
                 ? 'You are editing the whole repeating series, including past and future dates.'
@@ -306,6 +306,30 @@ export function Editor({
                         )
                       }
                     />
+                  </label>
+                  <label className="member-role">
+                    <span>Member type</span>
+                    <select
+                      aria-label={`Member ${i + 1} type`}
+                      value={person.role}
+                      onChange={(e) =>
+                        setFamilyDraft((current) =>
+                          current.map((p) =>
+                            p.id === person.id
+                              ? { ...p, role: e.target.value as 'adult' | 'child' }
+                              : p,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="adult">Adult</option>
+                      <option value="child">Child</option>
+                    </select>
+                    <small>
+                      {person.role === 'child'
+                        ? 'Can earn stars and redeem rewards.'
+                        : 'Does not participate in stars or rewards.'}
+                    </small>
                   </label>
                   <label className="color-label">
                     <span>Color</span>
@@ -335,6 +359,7 @@ export function Editor({
                       id: newId(),
                       name: '',
                       initial: '?',
+                      role: 'adult',
                       color: '#347a72',
                       tint: '#deeeeb',
                     },
@@ -539,7 +564,10 @@ export function Editor({
                       onChange={(e) => setStars(Number(e.target.value))}
                     />
                   </label>
-                  <small>Optional · 0 means no stars. An operator unlocks star values.</small>
+                  <small>
+                    Optional · Only children earn stars. Adults can complete without stars. An
+                    operator unlocks star values.
+                  </small>
                   <RewardOperator onChange={() => renderOperator((n) => n + 1)} />
                 </div>
               )}

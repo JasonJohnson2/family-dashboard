@@ -117,7 +117,7 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
 }
 
 const fields = {
-  members: ['id', 'name', 'initial', 'color', 'tint'],
+  members: ['id', 'name', 'initial', 'color', 'tint', 'role'],
   events: [
     'id',
     'sourceId',
