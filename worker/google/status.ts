@@ -2,9 +2,8 @@ import { ApiError, HOUSEHOLD_ID } from '../database';
 import { calendars, connection } from './storage';
 import type { StoredCalendar } from './types';
 
-export const STALE_MS = 60 * 60_000;
-export const RETRY_MS = 60 * 60_000;
-export const MANUAL_RETRY_MS = 60_000;
+import { STALE_MS, RETRY_MS, MANUAL_RETRY_MS } from '../calendar/policy';
+export { STALE_MS, RETRY_MS, MANUAL_RETRY_MS } from '../calendar/policy';
 export type SyncFailure = 'authorization' | 'configuration' | 'unavailable';
 
 // Persist only our own categories, never provider messages or exception text.

@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Plus, Repeat2, RefreshCw } from 'lucide-react';
+import { CalendarConnections } from './CalendarConnections';
 import { useHousehold } from '../store';
 import { everyoneColor } from '../data/mock';
 import {
@@ -22,11 +23,11 @@ export function Calendar({
   open: (date: string) => void;
   viewEvent: (event: EventOccurrence) => void;
 }) {
-  const { today, events, family, sources, googleRefresh } = useHousehold();
-  const googleSync = useSyncExternalStore(googleRefresh.subscribe, googleRefresh.getSnapshot);
+  const { today, events, family, sources, calendarRefresh } = useHousehold();
+  const calendarSync = useSyncExternalStore(calendarRefresh.subscribe, calendarRefresh.getSnapshot);
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === 'visible') void googleRefresh.refresh();
+      if (document.visibilityState === 'visible') void calendarRefresh.refresh();
     };
     refresh();
     document.addEventListener('visibilitychange', refresh);
@@ -37,7 +38,8 @@ export function Calendar({
       window.removeEventListener('focus', refresh);
       window.removeEventListener('online', refresh);
     };
-  }, [googleRefresh]);
+  }, [calendarRefresh]);
+  const [connections, setConnections] = useState(false);
   const [view, setView] = useState<'day' | 'week' | 'month'>('week');
   const [date, setDate] = useState(today);
   const [member, setMember] = useState('all');
@@ -73,13 +75,16 @@ export function Calendar({
         <div className="calendar-sync">
           <button
             className="outline-button"
-            disabled={googleSync.syncing}
-            onClick={() => void googleRefresh.refresh(true)}
+            disabled={calendarSync.syncing}
+            onClick={() => void calendarRefresh.refresh(true)}
           >
             <RefreshCw size={17} aria-hidden="true" />
-            {googleSync.syncing ? 'Syncing...' : 'Sync calendars'}
+            {calendarSync.syncing ? 'Syncing...' : 'Sync calendars'}
           </button>
-          <span role="status">{googleSync.message}</span>
+          <button className="outline-button" onClick={() => setConnections(true)}>
+            Calendar connections
+          </button>
+          <span role="status">{calendarSync.message}</span>
         </div>
         <div className="calendar-toolbar">
           <div className="date-navigation">
@@ -194,12 +199,13 @@ export function Calendar({
           <span className="dot" />
           Our Home calendar
           <span className="legend-note">
-            {sources.some((s) => s.provider === 'google')
-              ? 'Google Calendar · Read only · Apple/iCloud integration planned'
-              : 'Apple/iCloud integration planned · No calendars connected'}
+            {sources.some((s) => s.provider === 'google' || s.provider === 'icloud')
+              ? 'Connected external calendars · Read only'
+              : 'Connect Google or Apple/iCloud calendars in Calendar connections'}
           </span>
         </footer>
       </div>
+      {connections && <CalendarConnections onClose={() => setConnections(false)} />}
     </section>
   );
 }

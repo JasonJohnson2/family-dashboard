@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<X:multistatus xmlns:X="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+ <X:response><X:href>/account/calendars/</X:href><X:propstat><X:prop><X:resourcetype><X:collection/></X:resourcetype></X:prop><X:status>HTTP/1.1 200 OK</X:status></X:propstat></X:response>
+ <X:response><X:href>family/</X:href><X:propstat><X:prop><X:resourcetype><X:collection/><C:calendar/></X:resourcetype><X:displayname>Family &amp; Friends</X:displayname><A:calendar-color>#aabbccff</A:calendar-color><C:supported-calendar-component-set><C:comp name="VEVENT"/></C:supported-calendar-component-set><X:supported-report-set><X:supported-report><X:report><X:sync-collection/></X:report></X:supported-report></X:supported-report-set></X:prop><X:status>HTTP/1.1 200 OK</X:status></X:propstat></X:response>
+ <X:response><X:href>personal/</X:href><X:propstat><X:prop><X:resourcetype><C:calendar/></X:resourcetype></X:prop><X:status>HTTP/1.1 200 OK</X:status></X:propstat><X:propstat><X:prop><X:displayname>Unavailable</X:displayname></X:prop><X:status>HTTP/1.1 404 Not Found</X:status></X:propstat></X:response>
+ <X:response><X:href>reminders/</X:href><X:propstat><X:prop><X:resourcetype><C:calendar/></X:resourcetype><C:supported-calendar-component-set><C:comp name="VTODO"/></C:supported-calendar-component-set></X:prop><X:status>HTTP/1.1 200 OK</X:status></X:propstat></X:response>
+</X:multistatus>

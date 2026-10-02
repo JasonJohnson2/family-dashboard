@@ -3,6 +3,8 @@ import { operatorRequired, validateRewards } from './rewards';
 import { requireRewardOperator, rewardOperatorRoute } from './reward-operator';
 import { readJson } from './http';
 import { googleRoute } from './google/routes';
+import { icloudRoute } from './icloud/routes';
+import { refreshCalendars } from './calendar/refresh';
 import { mutationSchema } from '../src/data/contracts';
 import {
   ApiError,
@@ -31,6 +33,9 @@ export default {
       if (url.pathname === '/api/google/callback') return await googleRoute(request, env);
       await requireHousehold(request, env);
       if (request.method !== 'GET' && request.method !== 'HEAD') sameOrigin(request);
+      env = { ...env, calendarHttpBudget: { remaining: 40 } };
+      if (url.pathname.startsWith('/api/icloud/')) return await icloudRoute(request, env);
+      if (url.pathname === '/api/calendar/refresh') return await refreshCalendars(request, env);
       if (url.pathname.startsWith('/api/google/')) return await googleRoute(request, env);
       if (url.pathname === '/api/household' && request.method === 'GET')
         return json(await readState(env.DB));

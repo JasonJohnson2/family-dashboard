@@ -1,6 +1,6 @@
 import type { CalendarEvent, CalendarSource, DateKey } from '../types';
 
-/** Transport-neutral seam. Google imports are normalized server-side; Apple/CalDAV remains a future provider. */
+/** Transport-neutral seam. Google and iCloud imports are normalized server-side into bounded read-only occurrences. */
 export interface CalendarProvider {
   readonly source: CalendarSource;
   listEvents(range: { from: DateKey; to: DateKey }): Promise<CalendarEvent[]>;

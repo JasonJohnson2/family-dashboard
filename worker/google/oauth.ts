@@ -5,6 +5,7 @@ import { ApiError, HOUSEHOLD_ID } from '../database';
 import { decryptToken, encryptToken, encryptionKey, hash, randomToken } from './crypto';
 import { commit, connection, disconnectStatements, withLease } from './storage';
 import type { GoogleEnv } from './types';
+import { providerFetch } from '../calendar/requestBudget';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
@@ -74,16 +75,20 @@ const tokenSchema = z.object({
 export async function tokenRequest(env: GoogleEnv, params: Record<string, string>) {
   let response: Response;
   try {
-    response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      signal: AbortSignal.timeout(15000),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        ...params,
-        client_id: env.GOOGLE_CLIENT_ID!,
-        client_secret: env.GOOGLE_CLIENT_SECRET!,
-      }),
-    });
+    response = await providerFetch(
+      'https://oauth2.googleapis.com/token',
+      {
+        method: 'POST',
+        signal: AbortSignal.timeout(15000),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          ...params,
+          client_id: env.GOOGLE_CLIENT_ID!,
+          client_secret: env.GOOGLE_CLIENT_SECRET!,
+        }),
+      },
+      env.calendarHttpBudget,
+    );
   } catch {
     throw new ApiError(502, 'Google could not be reached. Try again.', 'google_unavailable');
   }

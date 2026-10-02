@@ -163,3 +163,7 @@ Rewards V1 adds individual Stars, paid chores, household rewards, approval reque
 ## Member roles and child Rewards
 
 Migration `0007_member_roles.sql` defaults every existing member to Adult without changing star or redemption history. After deployment, open the family avatars → **Member type** → mark each child **Child** → **Save family**. Only children participate in Rewards; adults can still complete chores without earning stars. Family editing retains its existing authenticated-household access, and all operator-PIN protections remain unchanged. See [roles, history and setup](docs/rewards.md#adult--child-roles-migration-0007).
+
+## Apple/iCloud Calendar
+
+Read-only iCloud Calendar is available through Calendar → Calendar connections using the household operator PIN and an Apple app-specific password. Newly discovered calendars are disabled by default. Choose privacy and an optional member mapping, then save/sync. The additive migration `0008_icloud_calendar.sql` is applied by the existing Cloudflare deployment pipeline; no manual production deployment is needed. See [the exact Apple setup, security and sync guide](docs/icloud-calendar.md). Local and Google plans continue to use the same calendar UI.

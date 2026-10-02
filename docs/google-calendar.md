@@ -214,3 +214,7 @@ pnpm test:e2e
 References: [Google web-server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync), [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list), [calendarList.list](https://developers.google.com/workspace/calendar/api/v3/reference/calendarList/list).
 
 Sync coverage includes read-only fresh/no-op checks, one-hour staleness, the household manual button and cooldown, shared-lease concurrency, failure isolation, credential protection, incremental/410 recovery, no-change D1 write counts, and Calendar-only browser refresh without delaying household rendering.
+
+## Shared refresh with iCloud
+
+The Calendar page now calls `/api/calendar/refresh`, which coordinates the existing Google refresh service with read-only iCloud refresh and reports per-provider outcomes. The original `/api/google/*` endpoints, OAuth, privacy, mapping, incremental tokens and PIN/admin authorization remain compatible. Shared projection/encryption/lease helpers preserve Google's v1 ciphertext associated data and existing Google lease tables. A shared outbound budget protects the Worker free-tier subrequest limit. See [iCloud setup](icloud-calendar.md); no Google reconnection or new Google settings are required.

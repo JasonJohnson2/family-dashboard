@@ -281,6 +281,7 @@ export function validateReferences(state: HouseholdState, operations: Operation[
     if (
       (op.type === 'event.put' &&
         (op.value.id.startsWith('g_') ||
+          op.value.id.startsWith('i_') ||
           op.value.startInstant ||
           op.value.endInstant ||
           state.events.some((e) => e.id === op.value.id && e.sourceId !== 'local'))) ||

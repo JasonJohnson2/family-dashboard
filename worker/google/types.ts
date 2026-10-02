@@ -6,7 +6,7 @@ export interface GoogleSecrets {
   GOOGLE_APP_ORIGIN?: string;
 }
 export type GoogleEnv = Env & GoogleSecrets;
-export type PrivacyMode = 'busy' | 'title' | 'full';
+export type PrivacyMode = import('../../src/types').CalendarPrivacyMode;
 export interface Connection {
   household_id: string;
   id: string;

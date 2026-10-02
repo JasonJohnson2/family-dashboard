@@ -1,12 +1,16 @@
 import { z } from 'zod';
-import { idSchema } from '../../src/data/contracts';
+import { calendarSettings } from '../calendar/settings';
+export { calendarSettings } from '../calendar/settings';
 import { ApiError, HOUSEHOLD_ID } from '../database';
 import { accessToken } from './oauth';
+import { projectionWindow, WINDOW_RENEW_MS } from '../calendar/policy';
 import { isDue, syncFailure } from './status';
 import { assignImportedEvents, calendars, commit, connection, withLease } from './storage';
 import { eventId, normalizeEvent, sourceId } from './normalize';
 import type { GoogleEnv, StoredCalendar } from './types';
 import type { CalendarEvent } from '../../src/types';
+import { projectionChanges } from '../calendar/projection';
+import { providerFetch } from '../calendar/requestBudget';
 
 const calendarSchema = z.object({
   id: z.string().min(1).max(500),
@@ -50,10 +54,14 @@ export function googleClient(env: GoogleEnv) {
     for (let attempt = 0; attempt < 2; attempt++) {
       let response: Response;
       try {
-        response = await fetch(`https://www.googleapis.com/calendar/v3/${path}?${query}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(15000),
-        });
+        response = await providerFetch(
+          `https://www.googleapis.com/calendar/v3/${path}?${query}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(15000),
+          },
+          env.calendarHttpBudget,
+        );
       } catch {
         throw new ApiError(
           502,
@@ -172,14 +180,6 @@ export async function discover(env: GoogleEnv) {
     return (await calendars(env.DB)).map(safeCalendar);
   });
 }
-export const calendarSettings = z
-  .object({
-    sourceId: z.string().min(1).max(80),
-    enabled: z.boolean(),
-    privacyMode: z.enum(['busy', 'title', 'full']),
-    memberId: idSchema.nullable().optional(),
-  })
-  .strict();
 export async function configureCalendar(
   env: GoogleEnv,
   settings: z.infer<typeof calendarSettings>,
@@ -234,41 +234,6 @@ export async function configureCalendar(
     return safeCalendar((await calendars(env.DB)).find((c) => c.source_id === settings.sourceId)!);
   });
 }
-const eventColumns = [
-  'id',
-  'sourceId',
-  'externalId',
-  'title',
-  'date',
-  'endDate',
-  'startTime',
-  'endTime',
-  'allDay',
-  'timeZone',
-  'location',
-  'notes',
-  'recurrence',
-  'startInstant',
-  'endInstant',
-];
-function putEvents(db: D1Database, events: CalendarEvent[]) {
-  const statements: D1PreparedStatement[] = [];
-  for (let i = 0; i < events.length; i += 100) {
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO events (household_id,${eventColumns.join(',')}) SELECT ?,${eventColumns.map((c) => `json_extract(value,'$.${c}')`).join(',')} FROM json_each(?) WHERE true ON CONFLICT(household_id,id) DO UPDATE SET ${eventColumns
-            .filter((c) => c !== 'id')
-            .map((c) => `${c}=excluded.${c}`)
-            .join(
-              ',',
-            )} WHERE events.sourceId=excluded.sourceId AND events.externalId=excluded.externalId`,
-        )
-        .bind(HOUSEHOLD_ID, JSON.stringify(events.slice(i, i + 100))),
-    );
-  }
-  return statements;
-}
 type SyncMode = 'admin' | 'stale' | 'manual';
 async function selectCalendars(env: GoogleEnv, mode: SyncMode, requestedSource?: string) {
   if (!(await connection(env.DB))) {
@@ -288,84 +253,6 @@ async function selectCalendars(env: GoogleEnv, mode: SyncMode, requestedSource?:
       'google_cooldown',
     );
   return selected;
-}
-
-// Read under the operation lease, then commit this delta and metadata together with fencing.
-// Local events are protected even when an imported provider ID collides with their IDs.
-async function projectionChanges(
-  db: D1Database,
-  calendar: StoredCalendar,
-  imported: CalendarEvent[],
-  removed: string[],
-  full: boolean,
-) {
-  const incoming = new Map(imported.map((event) => [event.id, event]));
-  const rows = (
-    await db
-      .prepare(
-        'SELECT * FROM events WHERE household_id=? AND (sourceId=? OR id IN (SELECT value FROM json_each(?)))',
-      )
-      .bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify([...incoming.keys()]))
-      .all<Record<string, unknown>>()
-  ).results;
-  const existing = new Map(rows.map((row) => [String(row.id), row]));
-  const excluded = new Set(removed);
-  const deleted = rows
-    .filter(
-      (row) =>
-        row.sourceId === calendar.source_id &&
-        (excluded.has(String(row.id)) || (full && !incoming.has(String(row.id)))),
-    )
-    .map((row) => String(row.id));
-  const deletedIds = new Set(deleted);
-  const changed = [...incoming.values()].filter((event) => {
-    if (excluded.has(event.id)) return false;
-    const prior = existing.get(event.id);
-    if (!prior) return true;
-    if (prior.sourceId !== calendar.source_id || prior.externalId !== event.externalId)
-      return false;
-    return eventColumns.some((column) => {
-      const value =
-        column === 'allDay'
-          ? Number(event.allDay)
-          : column === 'recurrence'
-            ? JSON.stringify(event.recurrence)
-            : (event[column as keyof CalendarEvent] ?? null);
-      return prior[column] !== value;
-    });
-  });
-  const kept = new Set(
-    rows
-      .filter((row) => row.sourceId === calendar.source_id && !deletedIds.has(String(row.id)))
-      .map((row) => String(row.id)),
-  );
-  changed.forEach((event) => kept.add(event.id));
-  const assignments = (
-    await db
-      .prepare(
-        'SELECT m.event_id,m.member_id FROM event_members m JOIN events e ON e.household_id=m.household_id AND e.id=m.event_id WHERE e.household_id=? AND e.sourceId=?',
-      )
-      .bind(HOUSEHOLD_ID, calendar.source_id)
-      .all<{ event_id: string; member_id: string }>()
-  ).results;
-  const correct = new Set(
-    assignments.filter((m) => m.member_id === calendar.member_id).map((m) => m.event_id),
-  );
-  const membersChanged =
-    assignments.some((m) => kept.has(m.event_id) && m.member_id !== calendar.member_id) ||
-    (!!calendar.member_id && [...kept].some((id) => !correct.has(id)));
-  const statements = putEvents(db, changed);
-  if (deleted.length)
-    statements.push(
-      db
-        .prepare(
-          'DELETE FROM events WHERE household_id=? AND sourceId=? AND id IN (SELECT value FROM json_each(?))',
-        )
-        .bind(HOUSEHOLD_ID, calendar.source_id, JSON.stringify(deleted)),
-    );
-  if (membersChanged)
-    statements.push(...assignImportedEvents(db, calendar.source_id, calendar.member_id));
-  return { statements, visibleChanged: !!(changed.length || deleted.length || membersChanged) };
 }
 
 export async function sync(env: GoogleEnv, requestedSource?: string, mode: SyncMode = 'admin') {
@@ -399,14 +286,10 @@ export async function sync(env: GoogleEnv, requestedSource?: string, mode: SyncM
           calendar.projection_version !== 1 ||
           !calendar.sync_token ||
           !calendar.full_synced_at ||
-          Date.now() - Date.parse(calendar.full_synced_at) > 30 * 86400000 ||
+          Date.now() - Date.parse(calendar.full_synced_at) > WINDOW_RENEW_MS ||
           calendar.sync_time_zone !== zone;
-        let windowStart = full
-          ? new Date(now.valueOf() - 30 * 86400000).toISOString()
-          : calendar.window_start!;
-        let windowEnd = full
-          ? new Date(now.valueOf() + 365 * 86400000).toISOString()
-          : calendar.window_end!;
+        let windowStart = full ? projectionWindow(now.valueOf()).from : calendar.window_start!;
+        let windowEnd = full ? projectionWindow(now.valueOf()).to : calendar.window_end!;
         let imported: CalendarEvent[] = [],
           removed: string[] = [],
           syncToken: string | undefined;
@@ -472,8 +355,8 @@ export async function sync(env: GoogleEnv, requestedSource?: string, mode: SyncM
                   )
                 : error;
             full = true;
-            windowStart = new Date(now.valueOf() - 30 * 86400000).toISOString();
-            windowEnd = new Date(now.valueOf() + 365 * 86400000).toISOString();
+            windowStart = projectionWindow(now.valueOf()).from;
+            windowEnd = projectionWindow(now.valueOf()).to;
             // Drop the invalid token but keep the last safe display until a complete replacement succeeds.
             await commit(
               lease,

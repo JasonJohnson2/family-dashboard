@@ -13,6 +13,7 @@ export interface RecurrenceRule {
   frequency: Recurrence;
   until?: DateKey;
 }
+export type CalendarPrivacyMode = 'busy' | 'title' | 'full';
 export type CalendarProviderKind = 'local' | 'icloud' | 'google' | 'mock';
 export interface CalendarSource {
   id: string;

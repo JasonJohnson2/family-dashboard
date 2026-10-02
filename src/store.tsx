@@ -11,15 +11,15 @@ import { dateKey } from './lib/dates';
 import { newId } from './lib/id';
 import { householdApi } from './data/api';
 import { HouseholdController } from './data/controller';
-import { GoogleRefreshController } from './data/googleRefresh';
+import { CalendarRefreshController } from './data/calendarRefresh';
 import type { Operation } from './data/contracts';
 import type { CalendarEvent, Chore, FamilyMember, MealPlan, SharedList } from './types';
 
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 function useHouseholdState() {
   const [controller] = useState(() => new HouseholdController(householdApi));
-  const [googleRefresh] = useState(
-    () => new GoogleRefreshController(controller.refreshAfterCurrent),
+  const [calendarRefresh] = useState(
+    () => new CalendarRefreshController(controller.refreshAfterCurrent),
   );
   const sync = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [today, setToday] = useState(() => dateKey(new Date()));
@@ -155,7 +155,7 @@ function useHouseholdState() {
     rewards: sync.data?.rewards ?? [],
     redemptions: sync.data?.redemptions ?? [],
     starTransactions: sync.data?.starTransactions ?? [],
-    googleRefresh,
+    calendarRefresh,
     family: sync.data?.family ?? [],
     events: sync.data?.events ?? [],
     chores: sync.data?.chores ?? [],

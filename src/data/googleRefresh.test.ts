@@ -49,7 +49,7 @@ it('deduplicates active checks and reloads household data after a successful Goo
   expect(refresh.refresh()).toBe(pending);
   expect(reload).not.toHaveBeenCalled();
   const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0];
-  expect(url).toBe('/api/google/refresh');
+  expect(url).toBe('/api/calendar/refresh');
   expect(init?.body).toBe('{}');
   expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
   resolve(Response.json({ synced: 1 }));

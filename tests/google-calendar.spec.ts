@@ -17,7 +17,7 @@ test('automatic refresh leaves the dashboard usable while Google is slow and dis
   });
   let refreshes = 0;
   await page.route('**/api/household', (route) => route.fulfill({ json: state }));
-  await page.route('**/api/google/refresh', async (route) => {
+  await page.route('**/api/calendar/refresh', async (route) => {
     refreshes++;
     expect(route.request().method()).toBe('POST');
     expect(route.request().headers().authorization).toBeUndefined();
@@ -68,7 +68,7 @@ test('Google checks are Calendar-only and do not poll every minute', async ({ pa
   await loginHousehold(request);
   await page.clock.install();
   let refreshes = 0;
-  await page.route('**/api/google/refresh', (route) => {
+  await page.route('**/api/calendar/refresh', (route) => {
     refreshes++;
     return route.fulfill({ status: 503, json: { error: 'Unavailable' } });
   });
@@ -101,7 +101,7 @@ test('Sync calendars bypasses freshness, prevents overlapping clicks and shows e
   });
   let manual = 0;
   await page.route('**/api/household', (route) => route.fulfill({ json: state }));
-  await page.route('**/api/google/refresh', async (route) => {
+  await page.route('**/api/calendar/refresh', async (route) => {
     expect(route.request().headers().authorization).toBeUndefined();
     if (!route.request().postDataJSON().manual)
       return route.fulfill({
