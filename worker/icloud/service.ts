@@ -23,6 +23,7 @@ import {
   value,
   escapeXml,
   resourceUrl,
+  safeUrl,
   DavError,
   type DavClient,
 } from './dav';
@@ -399,6 +400,7 @@ async function importResources(
         directReads = false;
       }
     }
+    onPhase('event-report');
     const result = await get(c.url, 'REPORT', body([href], false), null);
     const rows = responses(result.root);
     if (rows.length !== 1 || resourceUrl(rows[0].href, c.url) !== href || rows[0].status !== 200)
@@ -551,6 +553,22 @@ export async function sync(env: Env, manual = false) {
               'icloud_limit',
             );
           for (const r of report.rows) {
+            const address = new URL(safeUrl(r.href, calendar.url));
+            const base = new URL(calendar.url);
+            // DAV sync/query responses may describe the collection itself.
+            // It is metadata, never an event file to download.
+            if (
+              address.origin === base.origin &&
+              address.pathname.replace(/\/$/, '') === base.pathname.replace(/\/$/, '')
+            ) {
+              if (r.status === 200) continue;
+              if (r.status === 404) throw new DavError(404);
+              throw new ApiError(
+                502,
+                'iCloud calendar metadata could not be read. Saved events are unchanged.',
+                'icloud_response',
+              );
+            }
             const href = resourceUrl(r.href, calendar.url);
             if (r.status === 404) {
               deleted.add(href);

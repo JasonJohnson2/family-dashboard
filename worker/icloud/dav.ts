@@ -85,7 +85,10 @@ export function safeUrl(href: string, base = 'https://caldav.icloud.com/') {
 export function resourceUrl(href: string, calendar: string) {
   const result = safeUrl(href, calendar),
     base = new URL(calendar);
-  if (!result.startsWith(base.origin + base.pathname.replace(/\/?$/, '/')))
+  if (
+    !result.startsWith(base.origin + base.pathname.replace(/\/?$/, '/')) ||
+    new URL(result).pathname.endsWith('/')
+  )
     throw new ApiError(502, 'iCloud returned a resource outside this calendar.', 'icloud_response');
   return result;
 }

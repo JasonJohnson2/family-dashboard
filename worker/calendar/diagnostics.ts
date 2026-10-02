@@ -1,7 +1,7 @@
 import { ApiError } from '../database';
 
 export type SyncPhase =
-  'credentials' | 'calendar-query' | 'event-download' | 'event-read' | 'database';
+  'credentials' | 'calendar-query' | 'event-download' | 'event-read' | 'event-report' | 'database';
 export interface SyncDiagnostic {
   code: string;
   message: string;

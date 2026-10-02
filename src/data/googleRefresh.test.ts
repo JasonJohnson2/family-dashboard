@@ -65,6 +65,38 @@ it('deduplicates active checks and reloads household data after a successful Goo
   expect(reload).toHaveBeenCalledTimes(1);
 });
 
+it('reloads committed imports and shows a safe database-status warning when status cannot be read', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      Response.json({
+        outcome: 'unavailable',
+        synced: 1,
+        status: { needsAttention: true },
+        providers: {
+          google: { outcome: 'complete', synced: 1, status: { needsAttention: false } },
+          icloud: {
+            outcome: 'complete',
+            synced: 0,
+            status: { needsAttention: true },
+            diagnostic: {
+              code: 'calendar_status',
+              phase: 'database',
+              message: 'Calendar connection status could not be loaded. Retry shortly.',
+            },
+          },
+        },
+      }),
+    ),
+  );
+  const reload = vi.fn(async () => {});
+  const refresh = new GoogleRefreshController(reload);
+  await refresh.refresh(true);
+  expect(reload).toHaveBeenCalledOnce();
+  expect(refresh.getSnapshot().message).toContain('calendar_status / database');
+  expect(refresh.getSnapshot().message).not.toContain('Reconnect');
+});
+
 it('isolates network, HTTP and timeout failures from household loading and allows later retries', async () => {
   vi.useFakeTimers();
   const fetch = vi

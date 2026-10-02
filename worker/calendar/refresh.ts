@@ -54,23 +54,44 @@ export async function refreshCalendars(request: Request, env: Env) {
           { outcome: 'complete', synced: 0 },
           { outcome: 'complete', synced: 0 },
         ];
-  const [gs, is] = await Promise.all([syncStatus(env.DB), icloudStatus(env.DB)]);
-  const providers = { google: { ...google, status: gs }, icloud: { ...icloud, status: is } };
+  // A late status read must not discard another provider's committed sync.
+  const status = async (
+    read: () => Promise<{ enabledCalendars: number; needsAttention: boolean }>,
+  ) => {
+    try {
+      return { status: await read() };
+    } catch {
+      return {
+        status: { enabledCalendars: 0, needsAttention: true },
+        diagnostic: {
+          code: 'calendar_status',
+          message: 'Calendar connection status could not be loaded. Retry shortly.',
+          phase: 'database' as const,
+        },
+      };
+    }
+  };
+  const [gs, is] = await Promise.all([
+    status(() => syncStatus(env.DB)),
+    status(() => icloudStatus(env.DB)),
+  ]);
+  const providers = { google: { ...google, ...gs }, icloud: { ...icloud, ...is } };
   return Response.json(
     {
       synced: google.synced + icloud.synced,
-      outcome: [google.outcome, icloud.outcome].includes('unavailable')
-        ? 'unavailable'
-        : [google.outcome, icloud.outcome].includes('busy')
-          ? 'busy'
-          : [google.outcome, icloud.outcome].includes('cooldown') &&
-              !google.synced &&
-              !icloud.synced
-            ? 'cooldown'
-            : 'complete',
+      outcome:
+        gs.diagnostic || is.diagnostic || [google.outcome, icloud.outcome].includes('unavailable')
+          ? 'unavailable'
+          : [google.outcome, icloud.outcome].includes('busy')
+            ? 'busy'
+            : [google.outcome, icloud.outcome].includes('cooldown') &&
+                !google.synced &&
+                !icloud.synced
+              ? 'cooldown'
+              : 'complete',
       status: {
-        enabledCalendars: gs.enabledCalendars + is.enabledCalendars,
-        needsAttention: gs.needsAttention || is.needsAttention,
+        enabledCalendars: gs.status.enabledCalendars + is.status.enabledCalendars,
+        needsAttention: gs.status.needsAttention || is.status.needsAttention,
       },
       providers,
     },

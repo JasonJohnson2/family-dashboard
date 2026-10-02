@@ -943,6 +943,55 @@ describe('iCloud API on real D1', () => {
     expect((await readState(db)).events).toEqual(before.events);
     expect((await readState(db)).household.revision).toBe(before.household.revision);
   }, 60000);
+  it('excludes the collection metadata row from full and incremental event inventories and refuses to download collections', async () => {
+    await connect();
+    await enable('title', 'kelly');
+    const normal = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
+      const body = String(init.body),
+        result = await normal(href, init);
+      if (body.includes('calendar-query') || body.includes('sync-collection'))
+        return response(
+          (await result.text()).replace(
+            '</d:multistatus>',
+            row(URL, '<d:getetag>collection-etag</d:getetag>') + '</d:multistatus>',
+          ),
+        );
+      if (body.includes('calendar-multiget'))
+        expect(body).not.toContain(`<d:href>${new globalThis.URL(URL).pathname}</d:href>`);
+      return result;
+    });
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    const source = (await primary()).source_id;
+    expect((await readState(db)).events.filter((e) => e.sourceId === source)).toHaveLength(1);
+    changes = new Map([['a.ics', 'changed']]);
+    records.set('a.ics', { etag: 'changed', ics: sample('Updated plan') });
+    token++;
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    expect(
+      (await readState(db)).events.filter((e) => e.sourceId === source).map((e) => e.title),
+    ).toEqual(['Updated plan']);
+    expect(() => resourceUrl(URL, URL)).toThrow('outside');
+    expect(() => resourceUrl(URL + 'child-folder/', URL)).toThrow('outside');
+    const cached = await readState(db),
+      saved = await primary();
+    fetchMock.mockImplementation(async (href: string, init: RequestInit) =>
+      String(init.body).includes('sync-collection')
+        ? response(
+            multistatus(
+              `<d:response><d:href>${URL}</d:href><d:status>HTTP/1.1 403 Forbidden</d:status></d:response>`,
+              'next',
+            ),
+          )
+        : normal(href, init),
+    );
+    expect(await refresh()).toMatchObject({
+      outcome: 'unavailable',
+      diagnostic: { code: 'icloud_response', phase: 'calendar-query' },
+    });
+    expect(await readState(db)).toEqual(cached);
+    expect((await primary()).sync_token).toBe(saved.sync_token);
+  }, 60000);
   it.each([400, 405, 501])(
     'uses single-resource REPORT after direct GET is rejected with HTTP %s, without repeating unsupported GET or partially committing',
     async (status) => {
@@ -993,7 +1042,7 @@ describe('iCloud API on real D1', () => {
       env.calendarHttpBudget = { remaining: 40 };
       expect(await refresh()).toMatchObject({
         outcome: 'unavailable',
-        diagnostic: { code: 'icloud_response', phase: 'event-read' },
+        diagnostic: { code: 'icloud_response', phase: 'event-report' },
       });
       expect(await readState(db)).toEqual(before);
       expect((await primary()).sync_token).toBe(saved.sync_token);
