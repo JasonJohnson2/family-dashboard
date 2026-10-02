@@ -376,16 +376,24 @@ async function importResources(
   to: string,
 ) {
   const data = new Map<string, { etag: string; events: CalendarEvent[] }>();
+  let expand = true;
   for (let i = 0; i < hrefs.length; i += 50) {
     const chunk = hrefs.slice(i, i + 50),
       body = (expand: boolean) =>
         `<c:calendar-multiget xmlns:d="DAV:" xmlns:c="${CAL}"><d:prop><d:getetag/><c:calendar-data>${expand ? `<c:expand start="${stamp(from)}" end="${stamp(to)}"/>` : ''}</c:calendar-data></d:prop>${chunk.map((h) => `<d:href>${escapeXml(new URL(h).pathname)}</d:href>`).join('')}</c:calendar-multiget>`;
     let result;
     try {
-      result = await get(c.url, 'REPORT', body(true), '1');
+      result = await get(c.url, 'REPORT', body(expand), '1');
     } catch (e) {
-      if (!(e instanceof DavError) || !(e.unsupportedExpansion || [400, 501].includes(e.davStatus)))
-        throw e;
+      const retryRaw =
+        expand &&
+        ((e instanceof DavError && (e.unsupportedExpansion || [400, 501].includes(e.davStatus))) ||
+          (e instanceof ApiError && ['icloud_timeout', 'icloud_network'].includes(e.code)));
+      if (!retryRaw) throw e;
+      // Failed server-side recurrence expansion gets one bounded raw-data retry.
+      // Keep raw mode for the remaining chunks so each batch cannot repeat the
+      // same expensive timeout. Normalization and commit remain all-or-nothing.
+      expand = false;
       result = await get(c.url, 'REPORT', body(false), '1');
     }
     for (const r of responses(result.root)) {

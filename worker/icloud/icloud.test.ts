@@ -39,6 +39,17 @@ const dummy = {
 } as Calendar;
 describe('CalDAV parsing, recurrence and credential isolation', () => {
   afterEach(() => vi.unstubAllGlobals());
+  it('distinguishes timeouts from transport failures without exposing exception text', async () => {
+    for (const [error, code] of [
+      [new DOMException(PASSWORD, 'TimeoutError'), 'icloud_timeout'],
+      [new DOMException(PASSWORD, 'AbortError'), 'icloud_timeout'],
+      [new TypeError(PASSWORD), 'icloud_network'],
+    ] as const) {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
+      await expect(client(ACCOUNT, PASSWORD)(URL, 'REPORT', '')).rejects.toMatchObject({ code });
+      await expect(client(ACCOUNT, PASSWORD)(URL, 'REPORT', '')).rejects.not.toThrow(PASSWORD);
+    }
+  });
   it('bounds external requests across providers and follows only validated Apple redirects', async () => {
     const fetch = vi
       .fn()
@@ -641,7 +652,7 @@ describe('iCloud API on real D1', () => {
     networkError = true;
     expect(await refresh()).toMatchObject({
       outcome: 'unavailable',
-      diagnostic: { code: 'icloud_unavailable', phase: 'calendar-query' },
+      diagnostic: { code: 'icloud_network', phase: 'calendar-query' },
     });
     expect((await readState(db)).events).toEqual(before.events);
     expect((await readState(db)).household.revision).toBe(before.household.revision);
@@ -794,6 +805,60 @@ describe('iCloud API on real D1', () => {
     expect((await readState(db)).events).toEqual(
       before.events.filter((e) => e.sourceId !== source),
     );
+  }, 60000);
+  it('retries slow expansion once in raw mode, bounds requests and keeps cached data/token if raw download also times out', async () => {
+    await connect();
+    await enable();
+    records = new Map(
+      Array.from({ length: 51 }, (_, i) => [
+        `event-${i}.ics`,
+        { etag: 'initial', ics: sample().replace('UID:event-one', `UID:event-${i}`) },
+      ]),
+    );
+    const normal = fetchMock.getMockImplementation()!;
+    let failRaw = false,
+      transportError = false;
+    fetchMock.mockImplementation(async (href: string, init: RequestInit) => {
+      const body = String(init.body);
+      if (body.includes('<c:expand') || (failRaw && body.includes('calendar-multiget'))) {
+        if (transportError) throw new TypeError('Private upstream detail ' + PASSWORD);
+        throw new DOMException('Private upstream detail ' + PASSWORD, 'TimeoutError');
+      }
+      return normal(href, init);
+    });
+    env.calendarHttpBudget = { remaining: 40 };
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    const downloads = fetchMock.mock.calls.filter((c) =>
+      String(c[1].body).includes('calendar-multiget'),
+    );
+    expect(downloads).toHaveLength(3);
+    expect(downloads.filter((c) => String(c[1].body).includes('<c:expand'))).toHaveLength(1);
+    expect(env.calendarHttpBudget.remaining).toBeGreaterThan(0);
+    const before = await readState(db),
+      stored = await primary();
+    expect(before.events.filter((e) => e.sourceId === stored.source_id)).toHaveLength(51);
+    failRaw = true;
+    changes = new Map([['event-0.ics', 'changed']]);
+    token++;
+    records.set('event-0.ics', { etag: 'changed', ics: sample('Changed private event') });
+    env.calendarHttpBudget = { remaining: 40 };
+    const result = await refresh();
+    expect(result).toMatchObject({
+      outcome: 'unavailable',
+      diagnostic: { code: 'icloud_timeout', phase: 'event-download' },
+    });
+    expect(JSON.stringify(result)).not.toContain(PASSWORD);
+    expect((await primary()).sync_token).toBe(stored.sync_token);
+    expect((await readState(db)).events).toEqual(before.events);
+    expect((await readState(db)).household.revision).toBe(before.household.revision);
+    failRaw = false;
+    transportError = true;
+    env.calendarHttpBudget = { remaining: 40 };
+    expect(await refresh()).toEqual({ outcome: 'complete', synced: 1 });
+    expect((await readState(db)).events.some((e) => e.title === 'Changed private event')).toBe(
+      true,
+    );
+    expect((await primary()).sync_token).not.toBe(stored.sync_token);
   }, 60000);
   it('preserves calendar configuration on same-account shard moves and renews the bounded window without retroactively importing history', async () => {
     await connect();

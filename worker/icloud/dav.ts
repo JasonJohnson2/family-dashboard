@@ -140,10 +140,15 @@ export function client(account: string, password: string, budget?: { remaining: 
         );
       } catch (error) {
         if (error instanceof ApiError) throw error;
+        const timedOut =
+          (error instanceof Error || error instanceof DOMException) &&
+          ['TimeoutError', 'AbortError'].includes(error.name);
         throw new ApiError(
           502,
-          'iCloud could not be reached. Saved events are still available.',
-          'icloud_unavailable',
+          timedOut
+            ? 'iCloud took too long to respond. Saved events are still available.'
+            : 'iCloud could not be reached. Saved events are still available.',
+          timedOut ? 'icloud_timeout' : 'icloud_network',
         );
       }
       if ([301, 302, 303, 307, 308].includes(response.status)) {

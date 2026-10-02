@@ -25,7 +25,14 @@ it('never returns arbitrary exception messages, provider bodies or unknown error
 });
 
 it('distinguishes bad encryption, event parsing, database and bounded-request failures', () => {
-  for (const code of ['icloud_credentials', 'icloud_event', 'icloud_commit', 'calendar_limit']) {
+  for (const code of [
+    'icloud_credentials',
+    'icloud_event',
+    'icloud_commit',
+    'calendar_limit',
+    'icloud_timeout',
+    'icloud_network',
+  ]) {
     expect(icloudDiagnostic(new ApiError(503, 'discarded', code)).code).toBe(code);
   }
 });

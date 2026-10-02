@@ -21,6 +21,8 @@ const descriptions: Record<string, string> = {
   icloud_limit: 'This iCloud sync exceeded the bounded request, response or event limit.',
   calendar_limit: 'The combined calendar sync reached its external request limit.',
   icloud_commit: 'The calendar database could not commit this sync. The batch was not saved.',
+  icloud_timeout: 'iCloud took too long to respond. Retry synchronization after the cooldown.',
+  icloud_network: 'The Worker could not reach iCloud. Retry synchronization after the cooldown.',
   icloud_unavailable:
     'iCloud synchronization could not complete. Check the sync step and HTTP status below.',
 };
