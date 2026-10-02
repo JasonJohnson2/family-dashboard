@@ -92,3 +92,60 @@ it('isolates network, HTTP and timeout failures from household loading and allow
   await refresh.refresh();
   expect(reload).toHaveBeenCalledTimes(1);
 });
+
+it('separates an older Google warning from the current iCloud sync diagnostic', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      Response.json({
+        outcome: 'unavailable',
+        synced: 0,
+        status: { needsAttention: true },
+        providers: {
+          google: { outcome: 'complete', status: { needsAttention: true } },
+          icloud: {
+            outcome: 'unavailable',
+            status: { needsAttention: true },
+            diagnostic: {
+              code: 'icloud_response',
+              phase: 'event-download',
+              httpStatus: 403,
+              message: 'iCloud returned a calendar response the dashboard could not read.',
+            },
+          },
+        },
+      }),
+    ),
+  );
+  const refresh = new GoogleRefreshController(async () => {});
+  await refresh.refresh(true);
+  expect(refresh.getSnapshot().message).toContain('Google has a saved sync warning.');
+  expect(refresh.getSnapshot().message).not.toContain('Google could not sync');
+  expect(refresh.getSnapshot().message).toContain('icloud_response / event-download / HTTP 403');
+});
+
+it('gives reconnect guidance for revoked Google credentials without blaming iCloud', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      Response.json({
+        outcome: 'complete',
+        synced: 1,
+        status: { needsAttention: true },
+        providers: {
+          google: {
+            outcome: 'complete',
+            status: { needsAttention: true, lastFailure: 'authorization' },
+          },
+          icloud: { outcome: 'complete', synced: 1, status: { needsAttention: false } },
+        },
+      }),
+    ),
+  );
+  const reload = vi.fn(async () => {});
+  const refresh = new GoogleRefreshController(reload);
+  await refresh.refresh(true);
+  expect(reload).toHaveBeenCalledOnce();
+  expect(refresh.getSnapshot().message).toContain('Google sign-in needs attention.');
+  expect(refresh.getSnapshot().message).not.toContain('iCloud could not sync');
+});

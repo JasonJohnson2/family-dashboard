@@ -639,7 +639,10 @@ describe('iCloud API on real D1', () => {
     const before = await readState(db),
       mapping = (await primary()).member_id;
     networkError = true;
-    expect((await refresh()).outcome).toBe('unavailable');
+    expect(await refresh()).toMatchObject({
+      outcome: 'unavailable',
+      diagnostic: { code: 'icloud_unavailable', phase: 'calendar-query' },
+    });
     expect((await readState(db)).events).toEqual(before.events);
     expect((await readState(db)).household.revision).toBe(before.household.revision);
     networkError = false;
@@ -669,7 +672,21 @@ describe('iCloud API on real D1', () => {
     await refresh();
     expect((await readState(db)).events).toEqual(before.events);
     records.set('a.ics', { etag: 'bad', ics: 'bad calendar' });
-    await refresh();
+    expect(await refresh()).toMatchObject({
+      diagnostic: { code: 'icloud_event', phase: 'event-download' },
+    });
+    await db.prepare('UPDATE icloud_calendars SET last_attempt_at=NULL').run();
+    const report = await (await call('/api/calendar/refresh', { manual: true }, false)).text();
+    expect(JSON.parse(report)).toMatchObject({
+      providers: {
+        icloud: {
+          outcome: 'unavailable',
+          diagnostic: { code: 'icloud_event', phase: 'event-download' },
+        },
+      },
+    });
+    for (const privateValue of [PASSWORD, ACCOUNT, 'Private notes', 'Sensitive title', URL])
+      expect(report).not.toContain(privateValue);
     expect((await readState(db)).events).toEqual(before.events);
     const source = (await primary()).source_id;
     await db

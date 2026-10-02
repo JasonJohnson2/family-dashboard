@@ -5,6 +5,7 @@ import { assignImportedEvents, projectionChanges } from '../calendar/projection'
 import { encryptionKey, encryptSecret, decryptSecret } from '../calendar/credentials';
 import { hash } from '../google/crypto';
 import { calendarSettings } from '../calendar/settings';
+import { icloudDiagnostic, type SyncDiagnostic, type SyncPhase } from '../calendar/diagnostics';
 import {
   STALE_MS,
   RETRY_MS,
@@ -433,12 +434,14 @@ export async function sync(env: Env, manual = false) {
         selected = await select();
       let synced = 0,
         failed = false;
+      let diagnostic: SyncDiagnostic | undefined;
       if (!c || !selected.length) return { outcome: 'complete', synced: 0 };
       const get = await authenticatedClient(env, c),
         zone = (await env.DB.prepare('SELECT timeZone FROM households WHERE id=?')
           .bind(HOUSEHOLD_ID)
           .first<{ timeZone: string }>())!.timeZone;
       for (const calendar of selected) {
+        let phase: SyncPhase = 'calendar-query';
         const now = new Date().toISOString();
         await commit(
           lease,
@@ -497,6 +500,7 @@ export async function sync(env: Env, manual = false) {
           const changed = [...found.keys()].filter(
             (href) => reset || old.find((r) => r.href === href)?.etag !== found.get(href),
           );
+          phase = 'event-download';
           const data = await importResources(get, calendar, changed, zone, from, to),
             imported = [...data.values()].flatMap((d) => d.events);
           if (imported.length > 10000)
@@ -509,6 +513,7 @@ export async function sync(env: Env, manual = false) {
             .filter((r) => deleted.has(r.href) || data.has(r.href))
             .flatMap((r) => JSON.parse(r.event_ids) as string[])
             .filter((id) => !imported.some((e) => e.id === id));
+          phase = 'database';
           const delta = await projectionChanges(env.DB, calendar, imported, removed, reset);
           const statements = delta.statements;
           const resourceDeletes = new Set(
@@ -565,6 +570,7 @@ export async function sync(env: Env, manual = false) {
             continue;
           } // Confirmed collection removal only.
           failed = true;
+          diagnostic ??= icloudDiagnostic(e, phase);
           const authorization = e instanceof ApiError && e.code === 'icloud_authorization',
             failure = authorization
               ? 'authorization'
@@ -587,7 +593,11 @@ export async function sync(env: Env, manual = false) {
           if (authorization) break;
         }
       }
-      return { outcome: failed ? 'unavailable' : 'complete', synced };
+      return {
+        outcome: failed ? 'unavailable' : 'complete',
+        synced,
+        ...(diagnostic ? { diagnostic } : {}),
+      };
     },
     'icloud',
   );

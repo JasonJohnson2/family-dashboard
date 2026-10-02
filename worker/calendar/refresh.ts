@@ -4,6 +4,7 @@ import { readJson } from '../http';
 import { automaticSync } from '../google/automatic';
 import { syncStatus } from '../google/status';
 import { sync as icloudSync, status as icloudStatus } from '../icloud/service';
+import { icloudDiagnostic, type SyncDiagnostic } from './diagnostics';
 export async function refreshCalendars(request: Request, env: Env) {
   if (!['GET', 'POST'].includes(request.method))
     throw new ApiError(405, 'Use GET or POST for calendar refresh.');
@@ -18,13 +19,27 @@ export async function refreshCalendars(request: Request, env: Env) {
     if (!input.success) throw new ApiError(400, 'Send an empty object or a manual refresh flag.');
     manual = !!input.data.manual;
   }
-  const safe = async (fn: () => Promise<{ outcome: string; synced: number }>) => {
+  const safe = async (
+    fn: () => Promise<{ outcome: string; synced: number; diagnostic?: SyncDiagnostic }>,
+    provider: 'google' | 'icloud',
+  ) => {
     try {
       return await fn();
     } catch (e) {
       return {
         outcome: e instanceof ApiError && e.code === 'icloud_busy' ? 'busy' : 'unavailable',
         synced: 0,
+        ...(provider === 'icloud' && !(e instanceof ApiError && e.code === 'icloud_busy')
+          ? {
+              diagnostic: icloudDiagnostic(
+                e,
+                e instanceof ApiError &&
+                  ['icloud_configuration', 'icloud_credentials'].includes(e.code)
+                  ? 'credentials'
+                  : undefined,
+              ),
+            }
+          : {}),
       };
     }
   };
@@ -32,8 +47,8 @@ export async function refreshCalendars(request: Request, env: Env) {
   const [google, icloud] =
     request.method === 'POST'
       ? await Promise.all([
-          safe(() => automaticSync(env, manual)),
-          safe(() => icloudSync(env, manual)),
+          safe(() => automaticSync(env, manual), 'google'),
+          safe(() => icloudSync(env, manual), 'icloud'),
         ])
       : [
           { outcome: 'complete', synced: 0 },

@@ -138,7 +138,8 @@ export function client(account: string, password: string, budget?: { remaining: 
           },
           budget,
         );
-      } catch {
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
         throw new ApiError(
           502,
           'iCloud could not be reached. Saved events are still available.',

@@ -207,13 +207,25 @@ test('partial provider failure reports iCloud attention while Google and local c
         status: { enabledCalendars: 2, needsAttention: true },
         providers: {
           google: { outcome: 'complete', synced: 1, status: { needsAttention: false } },
-          icloud: { outcome: 'unavailable', synced: 0, status: { needsAttention: true } },
+          icloud: {
+            outcome: 'unavailable',
+            synced: 0,
+            status: { needsAttention: true },
+            diagnostic: {
+              code: 'icloud_response',
+              phase: 'event-download',
+              httpStatus: 403,
+              message: 'iCloud returned a calendar response the dashboard could not read.',
+            },
+          },
         },
       },
     }),
   );
   await page.goto('/#calendar');
-  await expect(page.getByText('iCloud could not sync.', { exact: false })).toBeVisible();
+  await expect(
+    page.getByText('icloud_response / event-download / HTTP 403', { exact: false }),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Family calendar' })).toBeVisible();
   await page.getByRole('button', { name: 'Add event', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
