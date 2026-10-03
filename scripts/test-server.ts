@@ -8,10 +8,20 @@ import { createDatabase, migrate, seed } from './test-database';
 import worker from '../worker/index';
 import { withTestCalendarExecutor } from './test-calendar-executor';
 
+// Demo fixtures use the server's civil date/timezone. Configure their household
+// accordingly; dedicated timezone tests explicitly exercise a different zone.
+async function seedBrowserHousehold(database: D1Database) {
+  await seed(database);
+  await database
+    .prepare('UPDATE households SET timeZone=? WHERE id=?')
+    .bind(Intl.DateTimeFormat().resolvedOptions().timeZone, 'home')
+    .run();
+}
+
 let runtime = createDatabase();
 let db = (await runtime.getD1Database('DB')) as unknown as D1Database;
 await migrate(db);
-await seed(db);
+await seedBrowserHousehold(db);
 const root = resolve('dist');
 const active = new Set<Promise<Response>>();
 const mime: Record<string, string> = {
@@ -34,7 +44,7 @@ const server = createServer(async (req, res) => {
       runtime = createDatabase();
       db = (await runtime.getD1Database('DB')) as unknown as D1Database;
       await migrate(db);
-      await seed(db);
+      await seedBrowserHousehold(db);
       res.end('Reset');
       return;
     }
