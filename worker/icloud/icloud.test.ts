@@ -1163,6 +1163,9 @@ describe('iCloud API on real D1', () => {
         expect((await legacy.prepare(`SELECT * FROM ${name}`).all()).results).toEqual(before[i]);
       expect(await connection(legacy)).toBeNull();
       expect(await calendars(legacy)).toEqual([]);
+      // Validate the current reader after all subsequent migrations; the raw 0008 preservation assertions above remain unchanged.
+      await applyMigration(legacy, '0009_google_reconnect.sql');
+      await applyMigration(legacy, '0010_local_calendar_v2.sql');
       expect((await readState(legacy)).events).toHaveLength((await readState(db)).events.length);
     } finally {
       await legacyRuntime.dispose();

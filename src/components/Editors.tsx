@@ -1,17 +1,14 @@
+import { LocalEventEditor } from './LocalCalendarEditor';
+export { EventDetail } from './LocalCalendarEditor';
 import { RewardOperator } from './RewardOperator';
 import { operatorUnlocked } from '../data/operator';
-import { useRef, useState, type FormEvent } from 'react';
-import { Heart, MapPin, Repeat2, CalendarDays, Trash2, Pencil } from 'lucide-react';
+import { useState, type FormEvent } from 'react';
+import { Heart, Trash2 } from 'lucide-react';
 import { useHousehold } from '../store';
-import { formatDate, formatTime } from '../lib/dates';
 import { newId } from '../lib/id';
-import { eventSchema } from '../data/contracts';
 import { Avatar, Modal } from './ui';
 import type { EditorKind } from './Home';
-import type { CalendarEvent, EventOccurrence, Recurrence } from '../types';
-
-const sameEvent = (a: CalendarEvent, b?: CalendarEvent) =>
-  !!b && JSON.stringify(eventSchema.parse(a)) === JSON.stringify(eventSchema.parse(b));
+import type { EventOccurrence, Recurrence } from '../types';
 
 const repeatOptions: [Recurrence, string][] = [
   ['none', 'Does not repeat'],
@@ -21,19 +18,17 @@ const repeatOptions: [Recurrence, string][] = [
   ['monthly', 'Every month'],
 ];
 
-export function Editor({
+function HouseholdEditor({
   kind,
   date,
   onClose,
   newList = false,
-  eventId,
   choreId,
 }: {
-  kind: EditorKind;
+  kind: Exclude<EditorKind, 'event'>;
   date?: string;
   onClose: () => void;
   newList?: boolean;
-  eventId?: string;
   choreId?: string;
 }) {
   const store = useHousehold();
@@ -41,7 +36,6 @@ export function Editor({
     today,
     family,
     setFamily,
-    setEvents,
     setChores,
     meals,
     setMeals,
@@ -50,45 +44,27 @@ export function Editor({
     addItem,
     setNotice,
   } = store;
-  const [existingEvent] = useState(() =>
-    eventId ? store.events.find((event) => event.id === eventId) : undefined,
-  );
   const [existingChore] = useState(() => store.chores.find((c) => c.id === choreId));
   const [stars, setStars] = useState(existingChore?.stars ?? 0);
   const [, renderOperator] = useState(0);
-  const lastAttempt = useRef<CalendarEvent | undefined>(undefined);
-  const [day, setDay] = useState(existingEvent?.date ?? existingChore?.dueDate ?? date ?? today);
-  const [endDate, setEndDate] = useState(existingEvent?.endDate ?? '');
-  const [until, setUntil] = useState(
-    existingEvent?.recurrence.until ?? existingChore?.recurrence.until ?? '',
-  );
+  const [day, setDay] = useState(existingChore?.dueDate ?? date ?? today);
+  const [until, setUntil] = useState(existingChore?.recurrence.until ?? '');
   const existingMeal = meals.find((m) => m.date === day);
   const [title, setTitle] = useState(
-    existingEvent?.title ??
-      existingChore?.title ??
-      (kind === 'meal' ? (existingMeal?.title ?? '') : ''),
+    existingChore?.title ?? (kind === 'meal' ? (existingMeal?.title ?? '') : ''),
   );
-  const [memberIds, setMemberIds] = useState<string[]>(
-    existingEvent?.memberIds ?? existingChore?.memberIds ?? [],
-  );
+  const [memberIds, setMemberIds] = useState<string[]>(existingChore?.memberIds ?? []);
   const [recurrence, setRecurrence] = useState<Recurrence>(
-    existingEvent?.recurrence.frequency ?? existingChore?.recurrence.frequency ?? 'none',
+    existingChore?.recurrence.frequency ?? 'none',
   );
-  const [start, setStart] = useState(existingEvent?.startTime ?? '09:00');
-  const [end, setEnd] = useState(existingEvent?.endTime ?? '10:00');
-  const [allDay, setAllDay] = useState(existingEvent?.allDay ?? false);
-  const [location, setLocation] = useState(existingEvent?.location ?? '');
   const [emoji, setEmoji] = useState(existingMeal?.emoji ?? '🍽️');
-  const [notes, setNotes] = useState(
-    kind === 'event' ? (existingEvent?.notes ?? '') : (existingMeal?.notes ?? ''),
-  );
+  const [notes, setNotes] = useState(existingMeal?.notes ?? '');
   const [listId, setListId] = useState(lists[0]?.id ?? '');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [id] = useState(() => eventId ?? choreId ?? newId());
+  const [id] = useState(() => choreId ?? newId());
   const [familyDraft, setFamilyDraft] = useState(family);
   const heading = {
-    event: eventId ? 'Edit your plan' : 'Make a little plan',
     chore: choreId ? 'Edit this chore' : 'Share the little jobs',
     meal: existingMeal ? 'On the menu' : 'Plan something delicious',
     list: newList ? 'A fresh list' : 'Add to a shared list',
@@ -121,57 +97,6 @@ export function Editor({
       if (!title.trim()) {
         setError('Add a name to continue.');
         return;
-      }
-      if (kind === 'event' && endDate && endDate < day) {
-        setError('Choose an end date on or after the start date.');
-        return;
-      }
-      if (kind === 'event' && recurrence !== 'none' && until && until < day) {
-        setError('Choose a repeat end on or after the first date.');
-        return;
-      }
-      if (kind === 'event' && !allDay && (!endDate || endDate === day) && end <= start) {
-        setError('Choose an end time after the start time.');
-        return;
-      }
-      if (kind === 'event') {
-        if (eventId && (!existingEvent || existingEvent.sourceId !== 'local'))
-          throw new Error(
-            'This event is no longer available to edit. Close this form and refresh.',
-          );
-        const next: CalendarEvent = {
-          ...existingEvent,
-          id,
-          sourceId: existingEvent?.sourceId ?? 'local',
-          title: title.trim(),
-          date: day,
-          endDate: endDate || undefined,
-          startTime: allDay ? undefined : start,
-          endTime: allDay ? undefined : end,
-          allDay,
-          timeZone: existingEvent?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-          memberIds,
-          recurrence: {
-            frequency: recurrence,
-            until: recurrence === 'none' ? undefined : until || undefined,
-          },
-          location: location.trim(),
-          notes: notes.trim(),
-        };
-        await setEvents((current) => {
-          if (eventId) {
-            const latest = current.find((event) => event.id === eventId);
-            if (!latest) throw new Error('This event was removed. Close this form and refresh.');
-            if (!sameEvent(latest, existingEvent) && !sameEvent(latest, lastAttempt.current))
-              throw new Error(
-                'This event changed while you were editing. Close and reopen it to review the latest version.',
-              );
-          }
-          lastAttempt.current = next;
-          return current.some((event) => event.id === id)
-            ? current.map((event) => (event.id === id ? next : event))
-            : [...current, next];
-        });
       }
       if (kind === 'chore')
         await setChores((current) => [
@@ -216,17 +141,13 @@ export function Editor({
         } else await addItem(listId, title, id);
       }
       setNotice(
-        kind === 'event'
-          ? eventId
-            ? 'Calendar event updated'
-            : 'Added to the family calendar'
-          : kind === 'chore'
-            ? 'A little teamwork, planned'
-            : kind === 'meal'
-              ? 'Dinner is planned'
-              : newList
-                ? 'Your new list is ready'
-                : 'Added to your list',
+        kind === 'chore'
+          ? 'A little teamwork, planned'
+          : kind === 'meal'
+            ? 'Dinner is planned'
+            : newList
+              ? 'Your new list is ready'
+              : 'Added to your list',
       );
       onClose();
     } catch (failure) {
@@ -281,10 +202,7 @@ export function Editor({
           <p className="form-intro">
             {kind === 'family'
               ? 'The people who make this place home. Mark children to enable Rewards. Roles do not grant operator access; changing a role keeps all reward history.'
-              : existingEvent?.recurrence.frequency !== undefined &&
-                  existingEvent.recurrence.frequency !== 'none'
-                ? 'You are editing the whole repeating series, including past and future dates.'
-                : 'A small plan makes a little more room for the good stuff.'}
+              : 'A small plan makes a little more room for the good stuff.'}
           </p>
           {kind === 'family' ? (
             <div className="family-editor">
@@ -388,25 +306,19 @@ export function Editor({
                   maxLength={120}
                   required
                   placeholder={
-                    kind === 'event'
-                      ? 'e.g. A picnic in the park'
-                      : kind === 'chore'
-                        ? 'e.g. Take out the recycling'
-                        : kind === 'meal'
-                          ? 'e.g. Homemade pizza'
-                          : newList
-                            ? 'e.g. Weekend projects'
-                            : 'e.g. Fresh strawberries'
+                    kind === 'chore'
+                      ? 'e.g. Take out the recycling'
+                      : kind === 'meal'
+                        ? 'e.g. Homemade pizza'
+                        : newList
+                          ? 'e.g. Weekend projects'
+                          : 'e.g. Fresh strawberries'
                   }
                 />
               </label>
               {kind !== 'list' && (
                 <label>
-                  {kind === 'chore'
-                    ? 'First due date'
-                    : eventId && recurrence !== 'none'
-                      ? 'Series start date'
-                      : 'Date'}
+                  {kind === 'chore' ? 'First due date' : 'Date'}
                   <input
                     type="date"
                     value={day}
@@ -423,61 +335,7 @@ export function Editor({
                   />
                 </label>
               )}
-              {kind === 'event' && (
-                <>
-                  {existingEvent?.endDate && (
-                    <label>
-                      End date
-                      <input
-                        type="date"
-                        value={endDate}
-                        min={day}
-                        onChange={(e) => setEndDate(e.target.value)}
-                      />
-                    </label>
-                  )}
-                  <label className="simple-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={allDay}
-                      onChange={(e) => setAllDay(e.target.checked)}
-                    />
-                    All-day event
-                  </label>
-                  {!allDay && (
-                    <div className="form-columns">
-                      <label>
-                        Starts
-                        <input
-                          type="time"
-                          required
-                          value={start}
-                          onChange={(e) => setStart(e.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Ends
-                        <input
-                          type="time"
-                          required
-                          value={end}
-                          onChange={(e) => setEnd(e.target.value)}
-                        />
-                      </label>
-                    </div>
-                  )}
-                  <label>
-                    Location <span className="optional">(optional)</span>
-                    <input
-                      value={location}
-                      onChange={(e) => setLocation(e.target.value)}
-                      maxLength={160}
-                      placeholder="A place to be together"
-                    />
-                  </label>
-                </>
-              )}
-              {(kind === 'event' || kind === 'chore') && (
+              {kind === 'chore' && (
                 <>
                   <fieldset>
                     <legend>Who's it for?</legend>
@@ -526,7 +384,7 @@ export function Editor({
                   </label>
                 </>
               )}
-              {((kind === 'event' && eventId) || kind === 'chore') && recurrence !== 'none' && (
+              {kind === 'chore' && recurrence !== 'none' && (
                 <label>
                   Repeat until <span className="optional">(optional)</span>
                   <input
@@ -534,18 +392,6 @@ export function Editor({
                     value={until}
                     min={day}
                     onChange={(e) => setUntil(e.target.value)}
-                  />
-                </label>
-              )}
-              {kind === 'event' && (
-                <label>
-                  Notes <span className="optional">(optional)</span>
-                  <textarea
-                    rows={2}
-                    maxLength={2000}
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Anything to remember?"
                   />
                 </label>
               )}
@@ -663,15 +509,13 @@ export function Editor({
                 ? 'Saving…'
                 : kind === 'chore' && choreId
                   ? 'Save chore'
-                  : kind === 'event' && eventId
-                    ? 'Save event'
-                    : kind === 'family'
-                      ? 'Save family'
-                      : kind === 'meal'
-                        ? 'Save meal'
-                        : kind === 'list' && newList
-                          ? 'Create list'
-                          : 'Add ' + (kind === 'list' ? 'item' : kind)}
+                  : kind === 'family'
+                    ? 'Save family'
+                    : kind === 'meal'
+                      ? 'Save meal'
+                      : kind === 'list' && newList
+                        ? 'Create list'
+                        : 'Add ' + (kind === 'list' ? 'item' : kind)}
             </button>
           </div>
           <p className="demo-note">Changes are saved to your household</p>
@@ -681,67 +525,17 @@ export function Editor({
   );
 }
 
-export function EventDetail({
-  event,
-  onClose,
-  onEdit,
-}: {
-  event: EventOccurrence;
-  onClose: () => void;
-  onEdit: () => void;
-}) {
-  const { family, sources } = useHousehold();
-  return (
-    <Modal title={event.title} onClose={onClose}>
-      <div className="event-detail">
-        <p>
-          <CalendarDays size={21} />
-          <span>
-            {formatDate(event.occurrenceDate, { weekday: 'long', month: 'long', day: 'numeric' })}
-            <small>
-              {event.allDay
-                ? 'All day'
-                : `${formatTime(event.startTime)} – ${formatTime(event.endTime)}`}
-            </small>
-          </span>
-        </p>
-        {event.location && (
-          <p>
-            <MapPin size={21} />
-            {event.location}
-          </p>
-        )}
-        {event.recurrence.frequency !== 'none' && (
-          <p>
-            <Repeat2 size={21} />
-            Repeats {event.recurrence.frequency}
-          </p>
-        )}
-        <div className="event-members">
-          {(event.memberIds.length
-            ? family.filter((p) => event.memberIds.includes(p.id))
-            : family
-          ).map((p) => (
-            <span key={p.id}>
-              <Avatar id={p.id} small />
-              {p.name}
-            </span>
-          ))}
-        </div>
-        {event.notes && <p className="event-notes">{event.notes}</p>}
-        <p className="muted">
-          {sources.find((s) => s.id === event.sourceId)?.name} · {event.timeZone}
-        </p>
-        {event.sourceId === 'local' && (
-          <button className="primary full-width" onClick={onEdit}>
-            <Pencil size={18} />
-            Edit event
-          </button>
-        )}
-        <button className="outline-button full-width" onClick={onClose}>
-          Lovely, got it
-        </button>
-      </div>
-    </Modal>
+export function Editor(
+  props: Omit<Parameters<typeof HouseholdEditor>[0], 'kind'> & {
+    kind: EditorKind;
+    eventId?: string;
+    event?: EventOccurrence;
+    scope?: import('../types').EventScope;
+  },
+) {
+  return props.kind === 'event' ? (
+    <LocalEventEditor {...props} />
+  ) : (
+    <HouseholdEditor {...props} kind={props.kind} />
   );
 }

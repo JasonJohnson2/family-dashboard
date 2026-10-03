@@ -80,6 +80,12 @@ The build identity needs Workers deployment and D1 edit permissions for this acc
 - Calendar sync runs in the internal `CALENDAR_SYNC` Durable Object so parsing and recurrence expansion have its larger CPU allowance on Workers Free. D1 remains the datastore. The binding and SQLite-backed class-registration migration deploy with Wrangler; no extra secret, D1 migration or setup command is required. Status reads stay read-only. See [calendar processing and Error 1102](docs/google-calendar.md#cloudflare-error-1102).
 - Existing prototype changes lived only in browser memory and cannot be recovered from a prior refresh. The new database starts deliberately; it does not import an old tab's demo state.
 
+## Local Family Calendar V2
+
+Local events now support multiple members, all-day/multi-day plans, custom recurrence, scoped editing/deletion, occurrence overrides, locations, plain-text notes and saved reminder configuration (no notification delivery yet). Google and iCloud stay read-only. See the [local calendar model, exception semantics, timezone policy, migration and reminder extension points](docs/local-calendar.md).
+
+The additive migration is **0010_local_calendar_v2.sql**. It preserves existing events and assignments. Use the existing local migration command; the Git-connected deployment command applies production migrations before publishing. No new secret, binding or seed step is needed.
+
 ## Google Calendar integration
 
 Phase 1 adds read-only OAuth, discovery, privacy-filtered imports and incremental sync. Start with the [Google Calendar setup and API guide](docs/google-calendar.md) for Google Cloud configuration, callback URL, required Worker secrets (including the encryption and management keys), migrations, local connection/sync commands, privacy modes and Phase 2 UI work. New calendars are disabled until explicitly selected.

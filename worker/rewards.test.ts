@@ -290,6 +290,8 @@ describe('Rewards on real D1', () => {
           before[i],
         );
       }
+      // Current calendar tables are independent of the historical migration asserted above.
+      await applyMigration(old, '0010_local_calendar_v2.sql');
       const state = await readState(old);
       expect(state.family.every((m) => m.role === 'adult')).toBe(true);
       expect(childMembers(state.family)).toEqual([]);
@@ -684,6 +686,8 @@ describe('Rewards on real D1', () => {
           snapshots[i].results,
         );
       await applyMigration(old, '0007_member_roles.sql');
+      // Current calendar tables are independent of the historical migration asserted above.
+      await applyMigration(old, '0010_local_calendar_v2.sql');
       const state = await readState(old);
       expect(state.chores.every((c) => c.stars === 0)).toBe(true);
       expect(state.starTransactions).toEqual([]);

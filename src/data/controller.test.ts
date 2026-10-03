@@ -12,6 +12,7 @@ const initial = (): HouseholdState => ({
   choreAwards: [],
   sources: [],
   events: [],
+  eventExceptions: [],
   chores: [],
   meals: [],
   lists: [{ id: 'l', name: 'Shopping', items: [{ id: 'i', text: 'Milk', completed: false }] }],

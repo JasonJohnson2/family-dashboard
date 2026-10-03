@@ -1,3 +1,5 @@
+import { applyLocalEventChange } from '../src/lib/localCalendar';
+import { isCalendarChange, validateLocalCalendar, calendarTimestamp } from './calendar/local';
 import { rewardStatements } from './rewards';
 import {
   stateSchema,
@@ -34,6 +36,7 @@ const tables = [
   'reward_redemptions',
   'star_transactions',
   'chore_star_awards',
+  'event_exceptions',
 ] as const;
 
 export async function readState(db: D1Database): Promise<HouseholdState> {
@@ -41,7 +44,9 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
     tables.map((table) =>
       db
         .prepare(
-          `SELECT * FROM ${table} WHERE ${table === 'households' ? 'id' : 'household_id'} = ? ORDER BY rowid`,
+          table === 'events'
+            ? 'SELECT e.*,m.createdAt,m.updatedAt,m.reminderMinutes FROM events e LEFT JOIN local_event_metadata m ON m.household_id=e.household_id AND m.id=e.id WHERE e.household_id=? ORDER BY e.rowid'
+            : `SELECT * FROM ${table} WHERE ${table === 'households' ? 'id' : 'household_id'} = ? ORDER BY rowid`,
         )
         .bind(HOUSEHOLD_ID),
     ),
@@ -63,6 +68,7 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
     redemptions,
     transactions,
     awards,
+    exceptions,
   ] = results.map((r) => r.results);
   if (!households[0])
     throw new ApiError(
@@ -100,6 +106,12 @@ export async function readState(db: D1Database): Promise<HouseholdState> {
       recurrence: JSON.parse(String(row.recurrence)),
       memberIds: assignments(eventMembers, 'event_id', row.id),
     })),
+    eventExceptions: exceptions.map((row) => ({
+      eventId: row.event_id,
+      recurrenceDate: row.recurrence_date,
+      cancelled: !!row.cancelled,
+      value: row.value ? JSON.parse(String(row.value)) : undefined,
+    })),
     chores: chores.map((row) => ({
       ...clean(row),
       recurrence: JSON.parse(String(row.recurrence)),
@@ -133,6 +145,7 @@ const fields = {
     'notes',
     'recurrence',
   ],
+  local_event_metadata: ['id', 'createdAt', 'updatedAt', 'reminderMinutes'],
   chores: ['id', 'title', 'dueDate', 'recurrence', 'stars'],
   meals: ['id', 'date', 'title', 'emoji', 'recipeId', 'notes'],
   lists: ['id', 'name'],
@@ -196,15 +209,90 @@ export function mutationStatements(
       [HOUSEHOLD_ID, id, JSON.stringify(ids)],
     );
   }
+  let calendar = { events: before.events, eventExceptions: before.eventExceptions };
   for (const op of mutation.operations) {
+    if (isCalendarChange(op)) {
+      const next = applyLocalEventChange(
+        calendar.events,
+        calendar.eventExceptions,
+        op as Parameters<typeof applyLocalEventChange>[2],
+      );
+      next.eventExceptions = next.eventExceptions.map((e) => {
+        const old = calendar.eventExceptions.find(
+          (v) => v.eventId === e.eventId && v.recurrenceDate === e.recurrenceDate,
+        );
+        return e.value && JSON.stringify(e) !== JSON.stringify(old)
+          ? {
+              ...e,
+              value: calendarTimestamp(
+                e.value,
+                calendar.events.find((v) => v.id === e.eventId),
+              ),
+            }
+          : e;
+      });
+      const affected = new Set<string>();
+      for (const old of calendar.events)
+        if (!next.events.some((e) => e.id === old.id)) {
+          write(`DELETE FROM events WHERE household_id=? AND id=? AND ${gate}`, [
+            HOUSEHOLD_ID,
+            old.id,
+          ]);
+          affected.add(old.id);
+        }
+      for (const value of next.events) {
+        const old = calendar.events.find((e) => e.id === value.id);
+        if (
+          JSON.stringify(value) !== JSON.stringify(old) ||
+          JSON.stringify(calendar.eventExceptions.filter((e) => e.eventId === value.id)) !==
+            JSON.stringify(next.eventExceptions.filter((e) => e.eventId === value.id))
+        ) {
+          const stamped = calendarTimestamp(value, old);
+          put('events', stamped);
+          put('local_event_metadata', stamped);
+          if (!old || JSON.stringify(old.memberIds) !== JSON.stringify(value.memberIds))
+            assign('event_members', 'event_id', value.id, value.memberIds);
+          affected.add(value.id);
+          next.events = next.events.map((e) => (e.id === value.id ? stamped : e));
+        }
+      }
+      for (const e of [...calendar.eventExceptions, ...next.eventExceptions])
+        if (
+          JSON.stringify(calendar.eventExceptions.filter((v) => v.eventId === e.eventId)) !==
+          JSON.stringify(next.eventExceptions.filter((v) => v.eventId === e.eventId))
+        )
+          affected.add(e.eventId);
+      for (const id of affected) {
+        if (!next.events.some((e) => e.id === id)) continue;
+        const old = calendar.eventExceptions.filter((e) => e.eventId === id),
+          changed = next.eventExceptions.filter((e) => e.eventId === id);
+        if (JSON.stringify(old) === JSON.stringify(changed)) continue;
+        const removed = old
+          .filter((e) => !changed.some((v) => v.recurrenceDate === e.recurrenceDate))
+          .map((e) => e.recurrenceDate);
+        const updated = changed.filter(
+          (e) =>
+            JSON.stringify(e) !==
+            JSON.stringify(old.find((v) => v.recurrenceDate === e.recurrenceDate)),
+        );
+        if (removed.length)
+          write(
+            `DELETE FROM event_exceptions WHERE household_id=? AND event_id=? AND recurrence_date IN (SELECT value FROM json_each(?)) AND ${gate}`,
+            [HOUSEHOLD_ID, id, JSON.stringify(removed)],
+          );
+        if (updated.length)
+          write(
+            `INSERT INTO event_exceptions (household_id,event_id,recurrence_date,cancelled,value) SELECT ?,?,json_extract(value,'$.recurrenceDate'),json_extract(value,'$.cancelled'),json_extract(value,'$.value') FROM json_each(?) WHERE ${gate} ON CONFLICT(household_id,event_id,recurrence_date) DO UPDATE SET cancelled=excluded.cancelled,value=excluded.value`,
+            [HOUSEHOLD_ID, id, JSON.stringify(updated)],
+          );
+      }
+      calendar = next;
+      continue;
+    }
     rewardStatements(op, before, mutation.id, gate, write);
     switch (op.type) {
       case 'member.put':
         put('members', op.value);
-        break;
-      case 'event.put':
-        put('events', op.value);
-        assign('event_members', 'event_id', op.value.id, op.value.memberIds);
         break;
       case 'chore.put':
         put('chores', { ...op.value, stars: op.value.stars ?? 0 });
@@ -274,6 +362,7 @@ export function mutationStatements(
 }
 
 export function validateReferences(state: HouseholdState, operations: Operation[]) {
+  validateLocalCalendar(state, operations);
   // Validate against a draft so a batch can create a list and then an item in that list.
   const members = new Set(state.family.map((m) => m.id)),
     lists = new Set(state.lists.map((l) => l.id));

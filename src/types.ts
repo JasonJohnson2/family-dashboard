@@ -13,6 +13,33 @@ export interface RecurrenceRule {
   frequency: Recurrence;
   until?: DateKey;
 }
+export interface EventRecurrenceRule {
+  frequency: Recurrence | 'yearly';
+  interval?: number;
+  byWeekday?: number[]; // RFC BYDAY: Sunday=0; weekly rules use Monday WKST.
+  monthWeek?: number; // 1..5 or -1 (last), with one byWeekday.
+  until?: DateKey; // Inclusive local date.
+  count?: number;
+}
+export interface EventException {
+  eventId: string;
+  recurrenceDate: DateKey; // Original start date, even when moved.
+  cancelled: boolean;
+  value?: CalendarEvent; // Full replacement snapshot, never a separate series.
+}
+export type EventScope = 'this' | 'future' | 'all';
+export type LocalEventChange =
+  | { type: 'event.put'; value: CalendarEvent }
+  | {
+      type: 'event.edit';
+      id: string;
+      recurrenceDate: DateKey;
+      scope: EventScope;
+      value: CalendarEvent;
+      newSeriesId?: string;
+    }
+  | { type: 'event.delete'; id: string; recurrenceDate: DateKey; scope: EventScope }
+  | { type: 'delete'; entity: 'event'; id: string };
 export type CalendarPrivacyMode = 'busy' | 'title' | 'full';
 export type CalendarProviderKind = 'local' | 'icloud' | 'google' | 'mock';
 export interface CalendarSource {
@@ -37,11 +64,16 @@ export interface CalendarEvent {
   memberIds: MemberId[];
   location?: string;
   notes?: string;
-  recurrence: RecurrenceRule;
+  recurrence: EventRecurrenceRule;
+  createdAt?: string;
+  updatedAt?: string;
+  reminderMinutes?: number; // Configuration only; no notification delivery in V2.
 }
 export interface EventOccurrence extends CalendarEvent {
   occurrenceDate: DateKey;
   occurrenceId: string;
+  recurrenceDate: DateKey;
+  isException?: boolean;
 }
 export interface Chore {
   stars?: number;

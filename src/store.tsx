@@ -1,3 +1,4 @@
+import { timeZoneFormatter } from './lib/timeZones';
 import {
   createContext,
   useContext,
@@ -22,7 +23,7 @@ function useHouseholdState() {
     () => new CalendarRefreshController(controller.refreshAfterCurrent),
   );
   const sync = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
-  const [today, setToday] = useState(() => dateKey(new Date()));
+  const [clockTime, setClockTime] = useState(() => new Date());
   const [notice, setNotice] = useState('');
   useEffect(() => {
     const lock = () => controller.destroy();
@@ -36,7 +37,7 @@ function useHouseholdState() {
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('focus', refresh);
     window.addEventListener('online', refresh);
-    const clock = setInterval(() => setToday(dateKey(new Date())), 30_000);
+    const clock = setInterval(() => setClockTime(new Date()), 30_000);
     const timer = setInterval(refresh, 60_000);
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (controller.getSnapshot().pending) event.preventDefault();
@@ -150,7 +151,16 @@ function useHouseholdState() {
     setNotice('Added to your list');
   };
   return {
-    today,
+    today: sync.data
+      ? (() => {
+          const p = Object.fromEntries(
+            timeZoneFormatter(sync.data.household.timeZone)
+              .formatToParts(clockTime)
+              .map((p) => [p.type, p.value]),
+          );
+          return p.year + '-' + p.month + '-' + p.day;
+        })()
+      : dateKey(clockTime),
     mutate: controller.mutate,
     rewards: sync.data?.rewards ?? [],
     redemptions: sync.data?.redemptions ?? [],
@@ -158,6 +168,7 @@ function useHouseholdState() {
     calendarRefresh,
     family: sync.data?.family ?? [],
     events: sync.data?.events ?? [],
+    eventExceptions: sync.data?.eventExceptions ?? [],
     chores: sync.data?.chores ?? [],
     meals: sync.data?.meals ?? [],
     lists: sync.data?.lists ?? [],

@@ -8,7 +8,7 @@ import {
   daysFrom,
   eventsOn,
   formatDate,
-  formatTime,
+  eventTimeLabel,
   parseDate,
   shiftMonth,
   weekStart,
@@ -23,7 +23,7 @@ export function Calendar({
   open: (date: string) => void;
   viewEvent: (event: EventOccurrence) => void;
 }) {
-  const { today, events, family, sources, calendarRefresh } = useHousehold();
+  const { today, events, eventExceptions, family, sources, calendarRefresh } = useHousehold();
   const calendarSync = useSyncExternalStore(calendarRefresh.subscribe, calendarRefresh.getSnapshot);
   useEffect(() => {
     const refresh = () => {
@@ -43,9 +43,10 @@ export function Calendar({
   const [view, setView] = useState<'day' | 'week' | 'month'>('week');
   const [date, setDate] = useState(today);
   const [member, setMember] = useState('all');
-  const visible = events.filter(
-    (e) => member === 'all' || e.memberIds.includes(member) || e.memberIds.length === 0,
-  );
+  const onDay = (day: string) =>
+    eventsOn(events, day, eventExceptions).filter(
+      (e) => member === 'all' || e.memberIds.includes(member) || !e.memberIds.length,
+    );
   const days =
     view === 'month'
       ? daysFrom(weekStart(`${date.slice(0, 7)}-01`), 42)
@@ -123,10 +124,10 @@ export function Calendar({
               <CalendarDays size={28} />
               <div>
                 <h3>{formatDate(date, { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-                <p>{eventsOn(visible, date).length} things on the horizon</p>
+                <p>{onDay(date).length} things on the horizon</p>
               </div>
             </div>
-            {eventsOn(visible, date).map((e) => (
+            {onDay(date).map((e) => (
               <div className="agenda-event" key={e.occurrenceId}>
                 <EventRow event={e} onClick={() => viewEvent(e)} />
                 <div className="agenda-meta">
@@ -137,14 +138,12 @@ export function Calendar({
                 </div>
               </div>
             ))}
-            {!eventsOn(visible, date).length && (
-              <Empty>Nothing on the calendar. Make a little plan?</Empty>
-            )}
+            {!onDay(date).length && <Empty>Nothing on the calendar. Make a little plan?</Empty>}
           </div>
         ) : (
           <div className={`calendar-grid ${view}`}>
             {days.map((day) => {
-              const dayEvents = eventsOn(visible, day);
+              const dayEvents = onDay(day);
               return (
                 <div
                   key={day}
@@ -165,7 +164,7 @@ export function Calendar({
                     {dayEvents.map((e) => (
                       <button
                         key={e.occurrenceId}
-                        aria-label={`${e.allDay ? 'All day' : formatTime(e.startTime)} ${e.title}`}
+                        aria-label={`${eventTimeLabel(e)} ${e.title}`}
                         className="calendar-event"
                         style={colorStyle(
                           family.find((p) => p.id === e.memberIds[0])?.color ?? everyoneColor,
@@ -173,7 +172,7 @@ export function Calendar({
                         onClick={() => viewEvent(e)}
                       >
                         <span>
-                          {e.allDay ? 'All day' : formatTime(e.startTime)}
+                          {eventTimeLabel(e)}
                           {e.recurrence.frequency !== 'none' && <Repeat2 size={11} />}
                         </span>
                         <strong>{e.title}</strong>

@@ -6,6 +6,7 @@ import {
   rewardOperations,
 } from './rewards';
 import { z } from 'zod';
+import { applyLocalEventChange } from '../lib/localCalendar';
 import { isValidTimeZone } from '../lib/timeZones';
 import type {
   CalendarEvent,
@@ -15,6 +16,7 @@ import type {
   ListItem,
   SharedList,
   CalendarSource,
+  EventException,
 } from '../types';
 
 export const idSchema = z
@@ -53,6 +55,31 @@ export const memberSchema: z.ZodType<FamilyMember> = z
     tint: z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/),
   })
   .strict();
+export const eventRecurrenceSchema = z
+  .object({
+    frequency: z.enum(['none', 'daily', 'weekdays', 'weekly', 'monthly', 'yearly']),
+    interval: z.number().int().min(1).max(999).optional(),
+    byWeekday: z
+      .array(z.number().int().min(0).max(6))
+      .min(1)
+      .max(7)
+      .refine((v) => new Set(v).size === v.length)
+      .optional(),
+    monthWeek: z.union([z.literal(-1), z.number().int().min(1).max(5)]).optional(),
+    until: dateSchema.optional(),
+    count: z.number().int().min(1).max(10000).optional(),
+  })
+  .strict()
+  .refine(
+    (r) =>
+      !(r.until && r.count) &&
+      (!r.byWeekday || r.frequency === 'weekly' || (r.frequency === 'monthly' && !!r.monthWeek)) &&
+      (!r.monthWeek || (r.frequency === 'monthly' && r.byWeekday?.length === 1)) &&
+      (r.frequency !== 'none' ||
+        (!r.until && !r.count && !r.byWeekday && !r.monthWeek && !r.interval)) &&
+      (r.frequency !== 'weekdays' || !r.interval),
+    'Check the repeat pattern and end condition.',
+  );
 export const eventSchema: z.ZodType<CalendarEvent> = z
   .object({
     id: idSchema,
@@ -70,7 +97,10 @@ export const eventSchema: z.ZodType<CalendarEvent> = z
     memberIds,
     location: z.string().trim().max(160).optional(),
     notes: z.string().max(2000).optional(),
-    recurrence,
+    recurrence: eventRecurrenceSchema,
+    createdAt: z.string().max(40).optional(),
+    updatedAt: z.string().max(40).optional(),
+    reminderMinutes: z.number().int().min(0).max(40320).optional(),
   })
   .strict()
   .refine(
@@ -86,6 +116,15 @@ export const eventSchema: z.ZodType<CalendarEvent> = z
             : (e.endDate && e.endDate > e.date) || e.endTime > e.startTime))),
     'Check the event dates and times.',
   );
+export const eventExceptionSchema: z.ZodType<EventException> = z
+  .object({
+    eventId: idSchema,
+    recurrenceDate: dateSchema,
+    cancelled: z.boolean(),
+    value: eventSchema.optional(),
+  })
+  .strict()
+  .refine((e) => (e.cancelled ? !e.value : !!e.value));
 export const choreSchema: z.ZodType<Chore> = z
   .object({
     id: idSchema,
@@ -137,6 +176,7 @@ export const stateSchema = z.object({
   family: z.array(memberSchema),
   sources: z.array(sourceSchema),
   events: z.array(eventSchema),
+  eventExceptions: z.array(eventExceptionSchema).default([]),
   chores: z.array(choreSchema),
   meals: z.array(mealSchema),
   lists: z.array(listSchema),
@@ -152,6 +192,24 @@ export const operationSchema = z.discriminatedUnion('type', [
   ...rewardOperations,
   z.object({ type: z.literal('member.put'), value: memberSchema }).strict(),
   z.object({ type: z.literal('event.put'), value: eventSchema }).strict(),
+  z
+    .object({
+      type: z.literal('event.edit'),
+      id: idSchema,
+      recurrenceDate: dateSchema,
+      scope: z.enum(['this', 'future', 'all']),
+      value: eventSchema,
+      newSeriesId: idSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('event.delete'),
+      id: idSchema,
+      recurrenceDate: dateSchema,
+      scope: z.enum(['this', 'future', 'all']),
+    })
+    .strict(),
   z.object({ type: z.literal('chore.put'), value: choreSchema }).strict(),
   z.object({ type: z.literal('meal.put'), value: mealSchema }).strict(),
   z
@@ -212,7 +270,9 @@ export function applyOperations(state: HouseholdState, operations: Operation[]):
         put(next.family, op.value);
         break;
       case 'event.put':
-        put(next.events, op.value);
+      case 'event.edit':
+      case 'event.delete':
+        Object.assign(next, applyLocalEventChange(next.events, next.eventExceptions, op));
         break;
       case 'chore.put':
         put(next.chores, {
@@ -256,7 +316,14 @@ export function applyOperations(state: HouseholdState, operations: Operation[]):
             next.family = next.family.filter((v) => v.id !== op.id);
             break;
           case 'event':
-            next.events = next.events.filter((v) => v.id !== op.id);
+            Object.assign(
+              next,
+              applyLocalEventChange(next.events, next.eventExceptions, {
+                type: 'delete',
+                entity: 'event',
+                id: op.id,
+              }),
+            );
             break;
           case 'chore':
             next.chores = next.chores.filter((v) => v.id !== op.id);

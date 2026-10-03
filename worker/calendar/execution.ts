@@ -2,7 +2,8 @@ import { ApiError, HOUSEHOLD_ID } from '../database';
 export type SyncOperation =
   | { kind: 'refresh'; manual: boolean }
   | { kind: 'google-refresh'; manual: boolean }
-  | { kind: 'google-sync'; sourceId?: string };
+  | { kind: 'google-sync'; sourceId?: string }
+  | { kind: 'local-window'; from: string; to: string };
 
 // Call only after the public route has checked household/operator permissions
 // and validated input. Do not forward cookies, OAuth state or browser headers.

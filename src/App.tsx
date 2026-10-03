@@ -46,6 +46,8 @@ export default function App() {
     date?: string;
     newList?: boolean;
     eventId?: string;
+    event?: EventOccurrence;
+    scope?: import('./types').EventScope;
     choreId?: string;
   } | null>(null);
   const [security, setSecurity] = useState(false);
@@ -330,8 +332,8 @@ export default function App() {
         <EventDetail
           event={event}
           onClose={() => setEvent(null)}
-          onEdit={() => {
-            setEditor({ kind: 'event', eventId: event.id });
+          onEdit={(scope) => {
+            setEditor({ kind: 'event', eventId: event.id, event, scope });
             setEvent(null);
           }}
         />

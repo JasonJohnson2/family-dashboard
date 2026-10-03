@@ -525,6 +525,8 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
         "INSERT INTO events(household_id,id,sourceId,title,date,allDay,timeZone,recurrence) VALUES ('home','legacy-event','legacy-source','Saved event','2026-09-21',1,'UTC','{\"frequency\":\"none\"}')",
       ),
     ]);
+    // The current reader needs the independent local calendar tables; the Google migration under test is still unapplied.
+    await applyMigration(db, '0010_local_calendar_v2.sql');
     const before = await readState(db),
       beforeConnection = await connection(db),
       beforeCalendars = await calendars(db);
@@ -1206,6 +1208,7 @@ describe('Google Worker API with real D1 and mocked Google HTTP', () => {
     await applyMigration(db, '0007_member_roles.sql');
     await applyMigration(db, '0008_icloud_calendar.sql');
     await applyMigration(db, '0009_google_reconnect.sql');
+    await applyMigration(db, '0010_local_calendar_v2.sql');
     await testSession(db);
     expect(await connection(db)).toEqual(before);
     expect((await calendars(db))[0]).toMatchObject({

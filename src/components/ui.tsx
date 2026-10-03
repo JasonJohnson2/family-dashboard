@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 
 import { ArrowRight, Check, ChevronRight, Repeat2, Pencil, X, type LucideIcon } from 'lucide-react';
 import { useHousehold } from '../store';
 import { everyoneColor } from '../data/mock';
-import { formatTime } from '../lib/dates';
+import { eventTimeLabel } from '../lib/dates';
 import type { Chore, EventOccurrence } from '../types';
 // comment debug
 export const colorStyle = (color: string): CSSProperties =>
@@ -109,7 +109,7 @@ export function EventRow({
   return (
     <button className={`event-row ${compact ? 'compact' : ''}`} onClick={onClick}>
       <span className="dot" style={{ background: color }} />
-      <time>{event.allDay ? 'All day' : formatTime(event.startTime)}</time>
+      <time>{eventTimeLabel(event)}</time>
       <span className="event-title">{event.title}</span>
       {event.recurrence.frequency !== 'none' && !compact && <Repeat2 size={14} className="muted" />}
       <ChevronRight size={17} />

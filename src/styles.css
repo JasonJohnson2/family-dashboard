@@ -3690,3 +3690,51 @@ button:disabled {
     display: flex;
   }
 }
+
+/* Local calendar V2: details unfold within the existing touch-friendly modal. */
+.event-fields,
+.recurrence-controls {
+  display: grid;
+  gap: 16px;
+}
+.local-event-editor .event-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.event-more {
+  border: 1px solid #dce6ec;
+  border-radius: 16px;
+  padding: 0 16px 16px;
+}
+.event-more summary {
+  padding: 16px 0;
+  min-height: 48px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.weekday-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.weekday-picker .simple-checkbox,
+.event-scope .simple-checkbox {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #edf4f6;
+}
+.event-scope {
+  border: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.event-scope legend {
+  margin-bottom: 12px;
+}
+.event-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -1,5 +1,8 @@
+import { dateSchema } from '../../src/data/contracts';
+import { eventWindow } from '../../src/lib/localCalendar';
+import { dayDifference } from '../../src/lib/calendarDates';
 import { z } from 'zod';
-import { ApiError } from '../database';
+import { ApiError, readState } from '../database';
 import { readJson } from '../http';
 import { refreshCalendarData } from './refresh';
 import { automaticSync } from '../google/automatic';
@@ -7,6 +10,7 @@ import { syncStatus } from '../google/status';
 import { sync } from '../google/calendar';
 
 const operationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('local-window'), from: dateSchema, to: dateSchema }).strict(),
   z.object({ kind: z.literal('refresh'), manual: z.boolean() }).strict(),
   z.object({ kind: z.literal('google-refresh'), manual: z.boolean() }).strict(),
   z
@@ -39,6 +43,23 @@ export class CalendarSync implements DurableObject {
       if (!input.success)
         throw new ApiError(400, 'Invalid calendar operation.', 'calendar_executor');
       const operation = input.data;
+      if (operation.kind === 'local-window') {
+        if (
+          operation.from < '1900-01-01' ||
+          operation.to > '2199-12-31' ||
+          dayDifference(operation.from, operation.to) < 0 ||
+          dayDifference(operation.from, operation.to) > 61
+        )
+          throw new ApiError(400, 'Choose a calendar window of at most 62 days.');
+        const state = await readState(this.env.DB);
+        try {
+          return json(
+            eventWindow(state.events, state.eventExceptions, operation.from, operation.to),
+          );
+        } catch {
+          throw new ApiError(400, 'Choose a smaller calendar window.');
+        }
+      }
       // Each incoming invocation gets a fresh shared external-request budget.
       const env = { ...this.env, calendarHttpBudget: { remaining: 40 } };
       if (operation.kind === 'refresh')

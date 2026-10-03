@@ -1,3 +1,6 @@
+import { executeCalendarSync } from './calendar/execution';
+import { dayDifference } from '../src/lib/calendarDates';
+import { dateSchema } from '../src/data/contracts';
 import { authRoute, requireHousehold, sameOrigin } from './household-auth';
 import { operatorRequired, validateRewards } from './rewards';
 import { requireRewardOperator, rewardOperatorRoute } from './reward-operator';
@@ -38,6 +41,19 @@ export default {
       if (url.pathname.startsWith('/api/icloud/')) return await icloudRoute(request, env);
       if (url.pathname === '/api/calendar/refresh') return await refreshCalendars(request, env);
       if (url.pathname.startsWith('/api/google/')) return await googleRoute(request, env);
+      if (url.pathname === '/api/calendar/events' && request.method === 'GET') {
+        const from = dateSchema.safeParse(url.searchParams.get('from')),
+          to = dateSchema.safeParse(url.searchParams.get('to'));
+        if (!from.success || !to.success || from.data < '1900-01-01' || to.data > '2199-12-31')
+          throw new ApiError(400, 'Use a valid calendar window.');
+        if (dayDifference(from.data, to.data) < 0 || dayDifference(from.data, to.data) > 61)
+          throw new ApiError(400, 'Choose a calendar window of at most 62 days.');
+        return await executeCalendarSync(env, {
+          kind: 'local-window',
+          from: from.data,
+          to: to.data,
+        });
+      }
       if (url.pathname === '/api/household' && request.method === 'GET')
         return json(await readState(env.DB));
       if (url.pathname !== '/api/mutations' && url.pathname !== '/api/rewards/operator')

@@ -24,8 +24,8 @@ interface Props {
 }
 
 export function Home({ navigate, open, viewEvent }: Props) {
-  const { today, events, chores, meals } = useHousehold();
-  const schedule = eventsOn(events, today);
+  const { today, events, eventExceptions, chores, meals } = useHousehold();
+  const schedule = eventsOn(events, today, eventExceptions);
   const todaysChores = chores.filter((chore) => occursOn(chore.dueDate, today, chore.recurrence));
   const upcomingMeals = meals
     .filter((meal) => meal.date >= today)
@@ -138,7 +138,7 @@ export function Home({ navigate, open, viewEvent }: Props) {
             <div className="upcoming">
               {[1, 2].map((offset) => {
                 const day = addDays(today, offset);
-                const items = eventsOn(events, day);
+                const items = eventsOn(events, day, eventExceptions);
                 return (
                   <div key={day}>
                     <h3>

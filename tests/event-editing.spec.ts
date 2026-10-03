@@ -32,6 +32,10 @@ test('edit from Home persists title, times, assignments, location and notes with
     .first()
     .click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Event name')).toHaveValue('Soccer practice');
   await expect(dialog.getByLabel('Notes')).toHaveValue('Bring a water bottle and cleats.');
@@ -80,8 +84,12 @@ test('editing a later occurrence preserves the series start, identity, timezone 
   await page.getByRole('button', { name: 'Next week', exact: true }).click();
   await page.getByRole('button', { name: /Soccer practice/ }).click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText('whole repeating series');
+  await expect(dialog).toContainText('Editing All events');
   await expect(dialog.getByLabel('Series start date')).toHaveValue(original.date);
   await expect(dialog.getByLabel('Repeat until')).toHaveValue(until);
   await dialog.getByLabel('Event name').fill('Weekly team practice');
@@ -107,6 +115,10 @@ test('cancel discards edits; all-day date changes save from the month view', asy
   await page.getByRole('button', { name: 'month', exact: true }).click();
   await page.getByRole('button', { name: /Dinner · Tacos/ }).click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   let dialog = page.getByRole('dialog');
   await dialog.getByLabel('Event name').fill('Do not save this');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -115,6 +127,10 @@ test('cancel discards edits; all-day date changes save from the month view', asy
   );
   await page.getByRole('button', { name: /Dinner · Tacos/ }).click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   dialog = page.getByRole('dialog');
   await dialog.getByLabel('All-day event').check();
   await dialog.getByLabel('Date', { exact: true }).fill('2026-10-15');
@@ -133,6 +149,10 @@ test('a lost edit response keeps the draft and retries without duplicating the e
   await page.goto('/#calendar');
   await page.getByRole('button', { name: /Soccer practice/ }).click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Event name').fill('Recovered edit');
   await page.route(
@@ -167,6 +187,10 @@ test('an event changed on another device while the editor is open is not overwri
   await page.goto('/#calendar');
   await page.getByRole('button', { name: /Soccer practice/ }).click();
   await page.getByRole('button', { name: 'Edit event', exact: true }).click();
+  if (await page.getByRole('heading', { name: 'Edit recurring event', exact: true }).isVisible()) {
+    await page.getByLabel('All events', { exact: true }).check();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  }
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Event name').fill('My draft');
   const original = (await household(request)).events.find((e: { id: string }) => e.id === 'soccer');

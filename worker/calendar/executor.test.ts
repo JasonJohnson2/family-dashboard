@@ -75,6 +75,19 @@ it('executes shared and legacy sync routes in a real SQLite-backed Object and ke
   });
   expect(managed.status).toBe(409);
   expect(await managed.json()).toMatchObject({ code: 'google_not_connected' });
+  const localWindow = await runtime.dispatchFetch(
+    'https://dashboard.test/api/calendar/events?from=2026-10-01&to=2026-10-31',
+    { headers: { Cookie: cookie } },
+  );
+  expect(localWindow.status).toBe(200);
+  expect(await localWindow.json()).toBeInstanceOf(Array);
+  expect(
+    (
+      await runtime.dispatchFetch(
+        'https://dashboard.test/api/calendar/events?from=2026-10-01&to=2026-10-31',
+      )
+    ).status,
+  ).toBe(401);
   expect((await request('/api/calendar/executor', { kind: 'google-sync' })).status).toBe(404);
   const namespace = await runtime.getDurableObjectNamespace('CALENDAR_SYNC');
   const invalid = await namespace

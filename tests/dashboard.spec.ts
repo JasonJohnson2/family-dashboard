@@ -55,7 +55,7 @@ test('create a weekly event with a family assignment and view its recurrence', a
   await page.getByRole('button', { name: 'Mia', exact: true }).click();
   await page.getByRole('button', { name: 'Next week', exact: true }).click();
   await page.getByRole('button', { name: /Weekly family walk/ }).click();
-  await expect(dialog).toContainText('Repeats weekly');
+  await expect(dialog).toContainText('Every week');
   await expect(dialog).toContainText('Mia');
   await dialog.getByRole('button', { name: 'Lovely, got it' }).click();
   await page.getByRole('button', { name: 'month', exact: true }).click();
